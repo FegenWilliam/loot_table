@@ -13,10 +13,14 @@ class LootItem:
         self.item_type = item_type
         self.quantity = quantity
         self.enchantments = []
+        self.effects = []  # For Equipment and Upgrade items
 
     def add_enchantment(self, enchantment):
         self.enchantments.append(enchantment)
         self.gold_value += enchantment.gold_value
+
+    def add_effect(self, effect):
+        self.effects.append(effect)
 
     def get_display_name(self):
         base_name = f"{self.quantity}x {self.name}" if self.quantity > 1 else self.name
@@ -24,6 +28,17 @@ class LootItem:
             enchant_names = ", ".join([e.name for e in self.enchantments])
             return f"{base_name} [{enchant_names}]"
         return base_name
+
+    def get_effects_display(self):
+        if not self.effects:
+            return ""
+        effect_strs = []
+        for effect in self.effects:
+            if effect.is_percentage:
+                effect_strs.append(f"-{effect.value}%")
+            else:
+                effect_strs.append(f"-{effect.value}")
+        return f" (Effects: {', '.join(effect_strs)})"
 
     def __str__(self):
         return f"{self.get_display_name()} ({self.gold_value}g)"
@@ -49,19 +64,40 @@ class Enchantment:
         return self.__str__()
 
 
+class Effect:
+    def __init__(self, effect_type, value, is_percentage=False):
+        self.effect_type = effect_type  # e.g., "draw_cost_reduction"
+        self.value = value  # numeric value
+        self.is_percentage = is_percentage  # True for %, False for flat
+
+    def __str__(self):
+        if self.is_percentage:
+            return f"{self.effect_type}: -{self.value}%"
+        else:
+            return f"{self.effect_type}: -{self.value}"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class CraftingRecipe:
     def __init__(self, output_name, output_type, output_gold_value):
         self.output_name = output_name
         self.output_type = output_type
         self.output_gold_value = output_gold_value
         self.ingredients = []
+        self.effects = []  # Effects for Equipment/Upgrade items
 
     def add_ingredient(self, item_name):
         self.ingredients.append(item_name)
 
+    def add_effect(self, effect):
+        self.effects.append(effect)
+
     def __str__(self):
         ingredient_list = ", ".join(self.ingredients) if self.ingredients else "No ingredients"
-        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g) = [{ingredient_list}]"
+        effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
+        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g){effects_str} = [{ingredient_list}]"
 
     def __repr__(self):
         return self.__str__()
@@ -72,6 +108,8 @@ class Player:
         self.name = name
         self.gold = 0
         self.inventory = []
+        self.equipped_items = []  # Items currently equipped
+        self.consumed_upgrades = []  # Upgrades that have been consumed
 
     def add_item(self, item):
         self.inventory.append(item)
@@ -80,6 +118,57 @@ class Player:
         if 0 <= index < len(self.inventory):
             return self.inventory.pop(index)
         return None
+
+    def equip_item(self, item):
+        """Equip an equipment item."""
+        self.equipped_items.append(item)
+
+    def unequip_item(self, index):
+        """Unequip an equipment item and return it."""
+        if 0 <= index < len(self.equipped_items):
+            return self.equipped_items.pop(index)
+        return None
+
+    def consume_upgrade(self, item):
+        """Consume an upgrade item permanently."""
+        self.consumed_upgrades.append(item)
+
+    def get_total_draw_cost_reduction(self):
+        """Calculate total draw cost reduction from equipment and upgrades."""
+        flat_reduction = 0
+        percentage_reduction = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "draw_cost_reduction":
+                    if effect.is_percentage:
+                        percentage_reduction += effect.value
+                    else:
+                        flat_reduction += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "draw_cost_reduction":
+                    if effect.is_percentage:
+                        percentage_reduction += effect.value
+                    else:
+                        flat_reduction += effect.value
+
+        return flat_reduction, percentage_reduction
+
+    def calculate_draw_cost(self, base_cost):
+        """Calculate the actual draw cost after reductions."""
+        flat, percent = self.get_total_draw_cost_reduction()
+
+        # Apply percentage reduction first
+        cost = base_cost * (1 - percent / 100)
+
+        # Then apply flat reduction
+        cost = max(0, cost - flat)  # Don't go below 0
+
+        return int(cost)
 
     def add_gold(self, amount):
         self.gold += amount
@@ -212,9 +301,53 @@ class GameSystem:
                                         'weight': ench.weight
                                     }
                                     for ench in item.enchantments
+                                ],
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
                                 ]
                             }
                             for item in player.inventory
+                        ],
+                        'equipped_items': [
+                            {
+                                'name': item.name,
+                                'weight': item.weight,
+                                'gold_value': item.gold_value,
+                                'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
+                                ]
+                            }
+                            for item in player.equipped_items
+                        ],
+                        'consumed_upgrades': [
+                            {
+                                'name': item.name,
+                                'weight': item.weight,
+                                'gold_value': item.gold_value,
+                                'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
+                                ]
+                            }
+                            for item in player.consumed_upgrades
                         ]
                     }
                     for name, player in self.players.items()
@@ -224,7 +357,15 @@ class GameSystem:
                         'output_name': recipe.output_name,
                         'output_type': recipe.output_type,
                         'output_gold_value': recipe.output_gold_value,
-                        'ingredients': recipe.ingredients
+                        'ingredients': recipe.ingredients,
+                        'effects': [
+                            {
+                                'effect_type': eff.effect_type,
+                                'value': eff.value,
+                                'is_percentage': eff.is_percentage
+                            }
+                            for eff in recipe.effects
+                        ]
                     }
                     for recipe in self.crafting_recipes
                 ],
@@ -303,7 +444,9 @@ class GameSystem:
             for name, player_data in data.get('players', {}).items():
                 player = Player(name)
                 player.gold = player_data['gold']
-                for item_data in player_data['inventory']:
+
+                # Load inventory
+                for item_data in player_data.get('inventory', []):
                     item = LootItem(
                         item_data['name'],
                         item_data['weight'],
@@ -320,7 +463,54 @@ class GameSystem:
                             ench_data.get('weight', 1000)
                         )
                         item.enchantments.append(ench)
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
                     player.add_item(item)
+
+                # Load equipped items
+                for item_data in player_data.get('equipped_items', []):
+                    item = LootItem(
+                        item_data['name'],
+                        item_data['weight'],
+                        item_data['gold_value'],
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1)
+                    )
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
+                    player.equip_item(item)
+
+                # Load consumed upgrades
+                for item_data in player_data.get('consumed_upgrades', []):
+                    item = LootItem(
+                        item_data['name'],
+                        item_data['weight'],
+                        item_data['gold_value'],
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1)
+                    )
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
+                    player.consume_upgrade(item)
+
                 self.players[name] = player
 
             # Load crafting recipes
@@ -332,6 +522,14 @@ class GameSystem:
                     recipe_data['output_gold_value']
                 )
                 recipe.ingredients = recipe_data['ingredients']
+                # Load effects
+                for eff_data in recipe_data.get('effects', []):
+                    eff = Effect(
+                        eff_data['effect_type'],
+                        eff_data['value'],
+                        eff_data.get('is_percentage', False)
+                    )
+                    recipe.add_effect(eff)
                 self.crafting_recipes.append(recipe)
 
             # Load enchantments
@@ -370,9 +568,10 @@ def show_main_menu():
     print("3. Draw Items")
     print("4. Sell Items")
     print("5. Crafting Menu")
-    print("6. Admin Menu")
-    print("7. Save Game")
-    print("8. Exit")
+    print("6. Equipment & Upgrades")
+    print("7. Admin Menu")
+    print("8. Save Game")
+    print("9. Exit")
     print("=" * 40)
 
 
@@ -428,6 +627,161 @@ def show_enchantment_menu():
     print("5. View all enchantments")
     print("6. Enchant item (player)")
     print("7. Back to crafting menu")
+
+
+def show_equipment_menu():
+    print("\n--- EQUIPMENT & UPGRADES MENU ---")
+    print("1. View player equipment & upgrades")
+    print("2. Equip item")
+    print("3. Unequip item")
+    print("4. Consume upgrade")
+    print("5. Back to main menu")
+
+
+def manage_equipment_upgrades(game):
+    while True:
+        show_equipment_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # View player equipment & upgrades
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            print(f"\n--- {player.name}'s Equipment & Upgrades ---")
+
+            flat, percent = player.get_total_draw_cost_reduction()
+            print(f"Total Draw Cost Reduction: -{flat} flat, -{percent}%")
+
+            print(f"\nEquipped Items ({len(player.equipped_items)}):")
+            if player.equipped_items:
+                for i, item in enumerate(player.equipped_items):
+                    effects_str = ", ".join([str(e) for e in item.effects])
+                    print(f"  {i}. {item.name} [{effects_str}]")
+            else:
+                print("  (none)")
+
+            print(f"\nConsumed Upgrades ({len(player.consumed_upgrades)}):")
+            if player.consumed_upgrades:
+                for item in player.consumed_upgrades:
+                    effects_str = ", ".join([str(e) for e in item.effects])
+                    print(f"  - {item.name} [{effects_str}]")
+            else:
+                print("  (none)")
+
+        elif choice == "2":
+            # Equip item
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            # Filter for Equipment items in inventory
+            equipment_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "equipment"]
+
+            if not equipment_items:
+                print(f"{player.name} has no equipment items to equip!")
+                continue
+
+            print(f"\n{player.name}'s Equipment Items:")
+            for idx, (inv_idx, item) in enumerate(equipment_items):
+                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                print(f"  {idx}. {item.name} [{effects_str}]")
+
+            try:
+                choice_idx = int(input("\nEnter item number to equip: ").strip())
+                if 0 <= choice_idx < len(equipment_items):
+                    inv_idx, item = equipment_items[choice_idx]
+                    player.remove_item(inv_idx)
+                    player.equip_item(item)
+                    print(f"✓ Equipped {item.name}!")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Unequip item
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            if not player.equipped_items:
+                print(f"{player.name} has no equipped items!")
+                continue
+
+            print(f"\n{player.name}'s Equipped Items:")
+            for i, item in enumerate(player.equipped_items):
+                effects_str = ", ".join([str(e) for e in item.effects])
+                print(f"  {i}. {item.name} [{effects_str}]")
+
+            try:
+                index = int(input("\nEnter item number to unequip: ").strip())
+                item = player.unequip_item(index)
+                if item:
+                    player.add_item(item)
+                    print(f"✓ Unequipped {item.name}!")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # Consume upgrade
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            # Filter for Upgrade items in inventory
+            upgrade_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "upgrade"]
+
+            if not upgrade_items:
+                print(f"{player.name} has no upgrade items to consume!")
+                continue
+
+            print(f"\n{player.name}'s Upgrade Items:")
+            for idx, (inv_idx, item) in enumerate(upgrade_items):
+                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                print(f"  {idx}. {item.name} [{effects_str}]")
+
+            try:
+                choice_idx = int(input("\nEnter item number to consume: ").strip())
+                if 0 <= choice_idx < len(upgrade_items):
+                    inv_idx, item = upgrade_items[choice_idx]
+                    player.remove_item(inv_idx)
+                    player.consume_upgrade(item)
+                    print(f"✓ Consumed {item.name}! Effects are now permanently applied.")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "5":
+            break
 
 
 def manage_loot_table(game):
@@ -749,12 +1103,21 @@ def draw_items_menu(game):
             print(f"Player '{player_name}' not found!")
             return
 
-        count = int(input(f"How many items to draw? (Cost: {selected_table.draw_cost}{game.currency_symbol} per draw): ").strip())
+        # Calculate actual draw cost with reductions
+        base_cost = selected_table.draw_cost
+        actual_cost = player.calculate_draw_cost(base_cost)
+
+        flat, percent = player.get_total_draw_cost_reduction()
+        reduction_info = ""
+        if flat > 0 or percent > 0:
+            reduction_info = f" (Base: {base_cost}{game.currency_symbol}, -{flat} flat, -{percent}%)"
+
+        count = int(input(f"How many items to draw? (Cost: {actual_cost}{game.currency_symbol} per draw{reduction_info}): ").strip())
         if count <= 0:
             print("Count must be greater than 0!")
             return
 
-        total_cost = count * selected_table.draw_cost
+        total_cost = count * actual_cost
 
         if player.gold < total_cost:
             print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol} but {player.name} only has {player.gold}{game.currency_symbol}")
@@ -763,7 +1126,7 @@ def draw_items_menu(game):
         player.remove_gold(total_cost)
 
         items = selected_table.draw_multiple(count)
-        print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {selected_table.draw_cost}{game.currency_symbol}) to {selected_table.name}")
+        print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
         print(f"🎲 {player.name} drew {count} items:")
         total_value = 0
         for i, item in enumerate(items, 1):
@@ -876,6 +1239,43 @@ def manage_crafting(game):
                     print("Recipe must have at least one ingredient!")
                     continue
 
+                # Add effects for Equipment or Upgrade items
+                if output_type.lower() in ["equipment", "upgrade"]:
+                    print(f"\n--- Adding Effects for {output_type} ---")
+                    print("Type 'done' when finished adding effects")
+                    while True:
+                        print("\nAvailable effect types:")
+                        print("  1. Draw cost reduction (flat)")
+                        print("  2. Draw cost reduction (percentage)")
+                        effect_choice = input("Choose effect type (1-2, or 'done'): ").strip().lower()
+
+                        if effect_choice == 'done':
+                            break
+
+                        if effect_choice == '1':
+                            try:
+                                value = int(input("Enter flat reduction amount: ").strip())
+                                if value > 0:
+                                    effect = Effect("draw_cost_reduction", value, False)
+                                    recipe.add_effect(effect)
+                                    print(f"✓ Added effect: -{value} draw cost")
+                                else:
+                                    print("Value must be greater than 0!")
+                            except ValueError:
+                                print("Invalid input!")
+
+                        elif effect_choice == '2':
+                            try:
+                                value = float(input("Enter percentage reduction (0-100): ").strip())
+                                if 0 < value <= 100:
+                                    effect = Effect("draw_cost_reduction", value, True)
+                                    recipe.add_effect(effect)
+                                    print(f"✓ Added effect: -{value}% draw cost")
+                                else:
+                                    print("Value must be between 0 and 100!")
+                            except ValueError:
+                                print("Invalid input!")
+
                 game.crafting_recipes.append(recipe)
                 print(f"✓ Added recipe: {recipe}")
             except ValueError:
@@ -970,6 +1370,9 @@ def manage_crafting(game):
 
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
+                    # Add effects from recipe to crafted item
+                    for effect in recipe.effects:
+                        crafted_item.add_effect(effect)
                     player.add_item(crafted_item)
                     crafted_count += 1
 
@@ -1360,7 +1763,7 @@ if __name__ == "__main__":
 
     while True:
         show_main_menu()
-        choice = input("Enter your choice (1-8): ").strip()
+        choice = input("Enter your choice (1-9): ").strip()
 
         if choice == "1":
             manage_loot_table(game)
@@ -1373,13 +1776,15 @@ if __name__ == "__main__":
         elif choice == "5":
             manage_crafting(game)
         elif choice == "6":
-            admin_menu(game)
+            manage_equipment_upgrades(game)
         elif choice == "7":
+            admin_menu(game)
+        elif choice == "8":
             if game.save_game():
                 print("✓ Game saved successfully!")
             else:
                 print("Failed to save game.")
-        elif choice == "8":
+        elif choice == "9":
             print("\nAre you sure you want to exit?")
             save_prompt = input("Save before exiting? (y/n/cancel): ").strip().lower()
 
@@ -1395,4 +1800,4 @@ if __name__ == "__main__":
             break
         else:
 
-            print("Invalid choice! Please enter 1-8.")
+            print("Invalid choice! Please enter 1-9.")
