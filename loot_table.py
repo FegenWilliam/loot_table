@@ -6,12 +6,13 @@ import sys
 
 
 class LootItem:
-    def __init__(self, name, weight, gold_value, item_type="misc", quantity=1):
+    def __init__(self, name, weight, gold_value, item_type="misc", quantity=1, rarity=None):
         self.name = name
         self.weight = weight
         self.gold_value = gold_value
         self.item_type = item_type
         self.quantity = quantity
+        self.rarity = rarity  # For Equipment items: Normal, Rare, Epic, Legendary
         self.enchantments = []
         self.effects = []  # For Equipment and Upgrade items
 
@@ -24,6 +25,11 @@ class LootItem:
 
     def get_display_name(self):
         base_name = f"{self.quantity}x {self.name}" if self.quantity > 1 else self.name
+
+        # Add rarity prefix for Equipment items
+        if self.rarity:
+            base_name = f"[{self.rarity}] {base_name}"
+
         if self.enchantments:
             enchant_names = ", ".join([e.name for e in self.enchantments])
             return f"{base_name} [{enchant_names}]"
@@ -78,6 +84,34 @@ class Effect:
 
     def __repr__(self):
         return self.__str__()
+
+
+class RaritySystem:
+    def __init__(self):
+        # Define rarities with their weights and effect slots
+        self.rarities = {
+            "Normal": {"weight": 500, "max_effects": 1},
+            "Rare": {"weight": 300, "max_effects": 2},
+            "Epic": {"weight": 150, "max_effects": 3},
+            "Legendary": {"weight": 50, "max_effects": 5}
+        }
+
+    def roll_rarity(self):
+        """Roll a random rarity based on weights."""
+        rarity_names = list(self.rarities.keys())
+        weights = [self.rarities[r]["weight"] for r in rarity_names]
+        return random.choices(rarity_names, weights=weights, k=1)[0]
+
+    def get_max_effects(self, rarity):
+        """Get the maximum number of effects for a given rarity."""
+        return self.rarities.get(rarity, {}).get("max_effects", 1)
+
+    def set_weight(self, rarity, weight):
+        """Set the weight for a specific rarity."""
+        if rarity in self.rarities:
+            self.rarities[rarity]["weight"] = weight
+            return True
+        return False
 
 
 class CraftingRecipe:
@@ -252,6 +286,7 @@ class GameSystem:
         self.enchant_cost_amount = 1
         self.currency_name = "gold"  # Configurable currency name
         self.currency_symbol = "g"  # Configurable currency symbol
+        self.rarity_system = RaritySystem()  # Rarity system for equipment
         self.save_file = "loot_system_save_new.json"
 
     def get_current_table(self):
@@ -293,7 +328,8 @@ class GameSystem:
                                 'weight': item.weight,
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
-                                'quantity': item.quantity
+                                'quantity': item.quantity,
+                                'rarity': item.rarity
                             }
                             for item in table.items
                         ]
@@ -311,6 +347,7 @@ class GameSystem:
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
                                 'quantity': item.quantity,
+                                'rarity': item.rarity,
                                 'enchantments': [
                                     {
                                         'name': ench.name,
@@ -338,6 +375,7 @@ class GameSystem:
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
                                 'quantity': item.quantity,
+                                'rarity': item.rarity,
                                 'effects': [
                                     {
                                         'effect_type': eff.effect_type,
@@ -356,6 +394,7 @@ class GameSystem:
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
                                 'quantity': item.quantity,
+                                'rarity': item.rarity,
                                 'effects': [
                                     {
                                         'effect_type': eff.effect_type,
@@ -399,7 +438,11 @@ class GameSystem:
                 'enchant_cost_item': self.enchant_cost_item,
                 'enchant_cost_amount': self.enchant_cost_amount,
                 'currency_name': self.currency_name,
-                'currency_symbol': self.currency_symbol
+                'currency_symbol': self.currency_symbol,
+                'rarity_weights': {
+                    rarity: data['weight']
+                    for rarity, data in self.rarity_system.rarities.items()
+                }
             }
 
             with open(self.save_file, 'w') as f:
@@ -432,7 +475,8 @@ class GameSystem:
                             item_data['weight'],
                             item_data['gold_value'],
                             item_data.get('item_type', 'misc'),
-                            item_data.get('quantity', 1)
+                            item_data.get('quantity', 1),
+                            item_data.get('rarity')
                         )
                         table.items.append(item)
                     self.loot_tables.append(table)
@@ -446,7 +490,8 @@ class GameSystem:
                         item_data['weight'],
                         item_data['gold_value'],
                         item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1)
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     table.items.append(item)
                 self.loot_tables.append(table)
@@ -470,7 +515,8 @@ class GameSystem:
                         item_data['weight'],
                         item_data['gold_value'],
                         item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1)
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     # Load enchantments
                     for ench_data in item_data.get('enchantments', []):
@@ -498,7 +544,8 @@ class GameSystem:
                         item_data['weight'],
                         item_data['gold_value'],
                         item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1)
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     # Load effects
                     for eff_data in item_data.get('effects', []):
@@ -517,7 +564,8 @@ class GameSystem:
                         item_data['weight'],
                         item_data['gold_value'],
                         item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1)
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     # Load effects
                     for eff_data in item_data.get('effects', []):
@@ -568,6 +616,11 @@ class GameSystem:
             # Load currency settings
             self.currency_name = data.get('currency_name', 'gold')
             self.currency_symbol = data.get('currency_symbol', 'g')
+
+            # Load rarity weights
+            if 'rarity_weights' in data:
+                for rarity, weight in data['rarity_weights'].items():
+                    self.rarity_system.set_weight(rarity, weight)
 
             return True
         except Exception as e:
@@ -623,7 +676,8 @@ def show_admin_menu(currency_name="gold"):
     print("3. Gift item to player")
     print("4. Take item from player")
     print("5. Change currency settings")
-    print("6. Back to main menu")
+    print("6. Configure rarity weights")
+    print("7. Back to main menu")
 
 
 def show_crafting_menu():
@@ -1417,13 +1471,27 @@ def manage_crafting(game):
 
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
-                    # Add effects from recipe to crafted item
-                    for effect in recipe.effects:
-                        crafted_item.add_effect(effect)
+
+                    # If Equipment, roll for rarity
+                    if recipe.output_type.lower() == "equipment":
+                        rarity = game.rarity_system.roll_rarity()
+                        crafted_item.rarity = rarity
+                        max_effects = game.rarity_system.get_max_effects(rarity)
+
+                        # Add effects from recipe, limited by rarity
+                        effects_to_add = recipe.effects[:max_effects]
+                        for effect in effects_to_add:
+                            crafted_item.add_effect(effect)
+
+                        print(f"✓ Crafted [{rarity}] {recipe.output_name}! ({len(effects_to_add)}/{len(recipe.effects)} effects) (Total: {crafted_count + 1})")
+                    else:
+                        # For non-Equipment (Upgrades, etc.), add all effects
+                        for effect in recipe.effects:
+                            crafted_item.add_effect(effect)
+                        print(f"✓ Crafted {recipe.output_name}! (Total: {crafted_count + 1})")
+
                     player.add_item(crafted_item)
                     crafted_count += 1
-
-                    print(f"✓ Crafted {recipe.output_name}! (Total: {crafted_count})")
 
                     # Ask if want to continue
                     continue_craft = input("Craft another? (press Enter to continue, 'done' to stop): ").strip().lower()
@@ -1775,6 +1843,34 @@ def admin_menu(game):
             print(f"✓ Currency updated: {game.currency_name} (symbol: {game.currency_symbol})")
 
         elif choice == "6":
+            # Configure rarity weights
+            print("\n--- RARITY WEIGHT CONFIGURATION ---")
+            print("Current rarity weights:")
+            total_weight = sum(data['weight'] for data in game.rarity_system.rarities.values())
+            for rarity, data in game.rarity_system.rarities.items():
+                weight = data['weight']
+                max_effects = data['max_effects']
+                percentage = (weight / total_weight) * 100
+                print(f"  {rarity}: weight {weight} ({percentage:.2f}%) - {max_effects} effect slots")
+
+            print("\nEnter new weights (leave blank to keep current):")
+            for rarity in game.rarity_system.rarities.keys():
+                current_weight = game.rarity_system.rarities[rarity]['weight']
+                new_weight_input = input(f"{rarity} [{current_weight}]: ").strip()
+                if new_weight_input:
+                    try:
+                        new_weight = float(new_weight_input)
+                        if new_weight > 0:
+                            game.rarity_system.set_weight(rarity, new_weight)
+                            print(f"✓ Updated {rarity} weight to {new_weight}")
+                        else:
+                            print(f"Weight must be greater than 0! Keeping {current_weight}")
+                    except ValueError:
+                        print(f"Invalid input! Keeping {current_weight}")
+
+            print("\n✓ Rarity weights updated!")
+
+        elif choice == "7":
             break
 
 
