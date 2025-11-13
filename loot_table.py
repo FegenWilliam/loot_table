@@ -86,6 +86,29 @@ class Effect:
         return self.__str__()
 
 
+class EffectTemplate:
+    """Template for effects that can be rolled when crafting Equipment/Upgrades."""
+    def __init__(self, name, effect_type, value, is_percentage=False, weight=1000):
+        self.name = name
+        self.effect_type = effect_type
+        self.value = value
+        self.is_percentage = is_percentage
+        self.weight = weight
+
+    def create_effect(self):
+        """Create an Effect instance from this template."""
+        return Effect(self.effect_type, self.value, self.is_percentage)
+
+    def __str__(self):
+        if self.is_percentage:
+            return f"{self.name}: {self.effect_type} -{self.value}% (weight: {self.weight})"
+        else:
+            return f"{self.name}: {self.effect_type} -{self.value} (weight: {self.weight})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class RaritySystem:
     def __init__(self):
         # Define rarities with their weights and effect slots
@@ -284,6 +307,8 @@ class GameSystem:
         self.enchantments = []
         self.enchant_cost_item = None
         self.enchant_cost_amount = 1
+        self.effect_templates = []  # Pool of effects that can be rolled
+        self.effect_cost = 100  # Currency cost to roll for an effect
         self.currency_name = "gold"  # Configurable currency name
         self.currency_symbol = "g"  # Configurable currency symbol
         self.rarity_system = RaritySystem()  # Rarity system for equipment
@@ -437,6 +462,17 @@ class GameSystem:
                 ],
                 'enchant_cost_item': self.enchant_cost_item,
                 'enchant_cost_amount': self.enchant_cost_amount,
+                'effect_templates': [
+                    {
+                        'name': eff_tmpl.name,
+                        'effect_type': eff_tmpl.effect_type,
+                        'value': eff_tmpl.value,
+                        'is_percentage': eff_tmpl.is_percentage,
+                        'weight': eff_tmpl.weight
+                    }
+                    for eff_tmpl in self.effect_templates
+                ],
+                'effect_cost': self.effect_cost,
                 'currency_name': self.currency_name,
                 'currency_symbol': self.currency_symbol,
                 'rarity_weights': {
@@ -613,6 +649,21 @@ class GameSystem:
             self.enchant_cost_item = data.get('enchant_cost_item')
             self.enchant_cost_amount = data.get('enchant_cost_amount', 1)
 
+            # Load effect templates
+            self.effect_templates = []
+            for eff_tmpl_data in data.get('effect_templates', []):
+                eff_tmpl = EffectTemplate(
+                    eff_tmpl_data['name'],
+                    eff_tmpl_data['effect_type'],
+                    eff_tmpl_data['value'],
+                    eff_tmpl_data.get('is_percentage', False),
+                    eff_tmpl_data.get('weight', 1000)
+                )
+                self.effect_templates.append(eff_tmpl)
+
+            # Load effect cost
+            self.effect_cost = data.get('effect_cost', 100)
+
             # Load currency settings
             self.currency_name = data.get('currency_name', 'gold')
             self.currency_symbol = data.get('currency_symbol', 'g')
@@ -677,7 +728,8 @@ def show_admin_menu(currency_name="gold"):
     print("4. Take item from player")
     print("5. Change currency settings")
     print("6. Configure rarity weights")
-    print("7. Back to main menu")
+    print("7. Manage effect pool")
+    print("8. Back to main menu")
 
 
 def show_crafting_menu():
@@ -688,6 +740,16 @@ def show_crafting_menu():
     print("4. Craft item (player)")
     print("5. Enchantment Menu")
     print("6. Back to main menu")
+
+
+def show_effect_pool_menu():
+    print("\n--- EFFECT POOL MENU ---")
+    print("1. Add effect template")
+    print("2. Edit effect template")
+    print("3. Delete effect template")
+    print("4. View all effect templates")
+    print("5. Set effect roll cost")
+    print("6. Back to admin menu")
 
 
 def show_enchantment_menu():
@@ -708,6 +770,145 @@ def show_equipment_menu():
     print("3. Unequip item")
     print("4. Consume upgrade")
     print("5. Back to main menu")
+
+
+def manage_effect_pool(game):
+    """Manage the pool of effect templates that can be rolled when crafting."""
+    while True:
+        show_effect_pool_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add effect template
+            name = input("Enter effect template name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            print("\nAvailable effect types:")
+            print("  1. draw_cost_reduction")
+            print("  2. double_quantity_chance")
+            effect_type_choice = input("Choose effect type (1-2): ").strip()
+
+            if effect_type_choice == '1':
+                effect_type = "draw_cost_reduction"
+            elif effect_type_choice == '2':
+                effect_type = "double_quantity_chance"
+            else:
+                print("Invalid effect type!")
+                continue
+
+            try:
+                value = float(input("Enter effect value: ").strip())
+                if value <= 0:
+                    print("Value must be greater than 0!")
+                    continue
+
+                is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
+                is_percentage = is_percentage_input == 'y'
+
+                weight = float(input("Enter weight (default 1000): ").strip() or "1000")
+                if weight <= 0:
+                    print("Weight must be greater than 0!")
+                    continue
+
+                effect_tmpl = EffectTemplate(name, effect_type, value, is_percentage, weight)
+                game.effect_templates.append(effect_tmpl)
+                print(f"✓ Added effect template: {effect_tmpl}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "2":
+            # Edit effect template
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print("\nCurrent effect templates:")
+            for i, tmpl in enumerate(game.effect_templates):
+                print(f"  {i}. {tmpl}")
+
+            try:
+                index = int(input("\nEnter effect template number to edit: ").strip())
+                if index < 0 or index >= len(game.effect_templates):
+                    print("Invalid template number!")
+                    continue
+
+                tmpl = game.effect_templates[index]
+                print(f"\nEditing: {tmpl.name}")
+                print("Leave blank to keep current value")
+
+                new_name = input(f"New name [{tmpl.name}]: ").strip()
+                weight_input = input(f"New weight [{tmpl.weight}]: ").strip()
+                value_input = input(f"New value [{tmpl.value}]: ").strip()
+
+                if new_name:
+                    tmpl.name = new_name
+                if weight_input:
+                    tmpl.weight = float(weight_input)
+                if value_input:
+                    tmpl.value = float(value_input)
+
+                print(f"✓ Updated effect template!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Delete effect template
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print("\nCurrent effect templates:")
+            for i, tmpl in enumerate(game.effect_templates):
+                print(f"  {i}. {tmpl}")
+
+            try:
+                index = int(input("\nEnter effect template number to delete: ").strip())
+                if 0 <= index < len(game.effect_templates):
+                    deleted = game.effect_templates.pop(index)
+                    print(f"✓ Deleted effect template: {deleted.name}")
+                else:
+                    print("Invalid template number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # View all effect templates
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print(f"Effect Roll Cost: {game.effect_cost}{game.currency_symbol}")
+            print(f"{'=' * 60}")
+            print("\nAll Effect Templates:")
+            total_weight = sum(t.weight for t in game.effect_templates)
+            for i, tmpl in enumerate(game.effect_templates):
+                percentage = (tmpl.weight / total_weight) * 100
+                print(f"  {i}. {tmpl.name}: {tmpl.effect_type}")
+                if tmpl.is_percentage:
+                    print(f"      Value: {tmpl.value}%")
+                else:
+                    print(f"      Value: {tmpl.value}")
+                print(f"      Weight: {tmpl.weight} ({percentage:.2f}%)")
+                print()
+
+        elif choice == "5":
+            # Set effect roll cost
+            print(f"\nCurrent effect roll cost: {game.effect_cost}{game.currency_symbol}")
+            try:
+                new_cost = int(input(f"Enter new cost (in {game.currency_name}): ").strip())
+                if new_cost < 0:
+                    print("Cost cannot be negative!")
+                    continue
+                game.effect_cost = new_cost
+                print(f"✓ Effect roll cost set to {game.effect_cost}{game.currency_symbol}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "6":
+            break
 
 
 def manage_equipment_upgrades(game):
@@ -1327,56 +1528,6 @@ def manage_crafting(game):
                     print("Recipe must have at least one ingredient!")
                     continue
 
-                # Add effects for Equipment or Upgrade items
-                if output_type.lower() in ["equipment", "upgrade"]:
-                    print(f"\n--- Adding Effects for {output_type} ---")
-                    print("Type 'done' when finished adding effects")
-                    while True:
-                        print("\nAvailable effect types:")
-                        print("  1. Draw cost reduction (flat)")
-                        print("  2. Draw cost reduction (percentage)")
-                        print("  3. Double quantity chance (percentage)")
-                        effect_choice = input("Choose effect type (1-3, or 'done'): ").strip().lower()
-
-                        if effect_choice == 'done':
-                            break
-
-                        if effect_choice == '1':
-                            try:
-                                value = int(input("Enter flat reduction amount: ").strip())
-                                if value > 0:
-                                    effect = Effect("draw_cost_reduction", value, False)
-                                    recipe.add_effect(effect)
-                                    print(f"✓ Added effect: -{value} draw cost")
-                                else:
-                                    print("Value must be greater than 0!")
-                            except ValueError:
-                                print("Invalid input!")
-
-                        elif effect_choice == '2':
-                            try:
-                                value = float(input("Enter percentage reduction (0-100): ").strip())
-                                if 0 < value <= 100:
-                                    effect = Effect("draw_cost_reduction", value, True)
-                                    recipe.add_effect(effect)
-                                    print(f"✓ Added effect: -{value}% draw cost")
-                                else:
-                                    print("Value must be between 0 and 100!")
-                            except ValueError:
-                                print("Invalid input!")
-
-                        elif effect_choice == '3':
-                            try:
-                                value = float(input("Enter double quantity chance (0-100): ").strip())
-                                if 0 < value <= 100:
-                                    effect = Effect("double_quantity_chance", value, True)
-                                    recipe.add_effect(effect)
-                                    print(f"✓ Added effect: {value}% chance to double item quantity")
-                                else:
-                                    print("Value must be between 0 and 100!")
-                            except ValueError:
-                                print("Invalid input!")
-
                 game.crafting_recipes.append(recipe)
                 print(f"✓ Added recipe: {recipe}")
             except ValueError:
@@ -1472,23 +1623,62 @@ def manage_crafting(game):
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
 
-                    # If Equipment, roll for rarity
-                    if recipe.output_type.lower() == "equipment":
-                        rarity = game.rarity_system.roll_rarity()
-                        crafted_item.rarity = rarity
-                        max_effects = game.rarity_system.get_max_effects(rarity)
+                    # If Equipment or Upgrade, allow player to roll for effects
+                    if recipe.output_type.lower() in ["equipment", "upgrade"]:
+                        if not game.effect_templates:
+                            print(f"\n⚠️  No effect templates available! Item crafted without effects.")
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                print(f"✓ Crafted [{rarity}] {recipe.output_name} (0 effects)")
+                            else:
+                                print(f"✓ Crafted {recipe.output_name} (0 effects)")
+                        else:
+                            # For Equipment, roll rarity first
+                            max_effects = None
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                max_effects = game.rarity_system.get_max_effects(rarity)
+                                print(f"\n✨ Rolled [{rarity}] {recipe.output_name}! (Max {max_effects} effects)")
+                            else:
+                                print(f"\n✓ Crafted {recipe.output_name}!")
 
-                        # Add effects from recipe, limited by rarity
-                        effects_to_add = recipe.effects[:max_effects]
-                        for effect in effects_to_add:
-                            crafted_item.add_effect(effect)
+                            # Roll for effects
+                            print(f"\nRoll for effects? Cost: {game.effect_cost}{game.currency_symbol} per roll")
+                            print(f"Your {game.currency_name}: {player.gold}{game.currency_symbol}")
 
-                        print(f"✓ Crafted [{rarity}] {recipe.output_name}! ({len(effects_to_add)}/{len(recipe.effects)} effects) (Total: {crafted_count + 1})")
+                            effects_added = 0
+                            while True:
+                                # Check if Equipment has reached max effects
+                                if max_effects and effects_added >= max_effects:
+                                    print(f"\n✓ Reached maximum effects for {rarity} rarity ({max_effects})!")
+                                    break
+
+                                roll_choice = input(f"\nRoll for effect #{effects_added + 1}? (y/n): ").strip().lower()
+                                if roll_choice != 'y':
+                                    break
+
+                                # Check if player has enough currency
+                                if player.gold < game.effect_cost:
+                                    print(f"❌ Not enough {game.currency_name}! Need {game.effect_cost}{game.currency_symbol}, have {player.gold}{game.currency_symbol}")
+                                    break
+
+                                # Deduct cost and roll for effect
+                                player.remove_gold(game.effect_cost)
+                                weights = [tmpl.weight for tmpl in game.effect_templates]
+                                rolled_template = random.choices(game.effect_templates, weights=weights, k=1)[0]
+                                effect = rolled_template.create_effect()
+                                crafted_item.add_effect(effect)
+                                effects_added += 1
+
+                                print(f"🎲 Rolled: {rolled_template.name}")
+                                print(f"   Effect: {effect}")
+                                print(f"   {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+                            print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
                     else:
-                        # For non-Equipment (Upgrades, etc.), add all effects
-                        for effect in recipe.effects:
-                            crafted_item.add_effect(effect)
-                        print(f"✓ Crafted {recipe.output_name}! (Total: {crafted_count + 1})")
+                        print(f"✓ Crafted {recipe.output_name}!")
 
                     player.add_item(crafted_item)
                     crafted_count += 1
@@ -1871,6 +2061,10 @@ def admin_menu(game):
             print("\n✓ Rarity weights updated!")
 
         elif choice == "7":
+            # Manage effect pool
+            manage_effect_pool(game)
+
+        elif choice == "8":
             break
 
 
