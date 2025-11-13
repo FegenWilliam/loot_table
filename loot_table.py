@@ -6,11 +6,12 @@ import sys
 
 
 class LootItem:
-    def __init__(self, name, weight, gold_value, item_type="misc"):
+    def __init__(self, name, weight, gold_value, item_type="misc", quantity=1):
         self.name = name
         self.weight = weight
         self.gold_value = gold_value
         self.item_type = item_type
+        self.quantity = quantity
         self.enchantments = []
 
     def add_enchantment(self, enchantment):
@@ -18,10 +19,11 @@ class LootItem:
         self.gold_value += enchantment.gold_value
 
     def get_display_name(self):
+        base_name = f"{self.quantity}x {self.name}" if self.quantity > 1 else self.name
         if self.enchantments:
             enchant_names = ", ".join([e.name for e in self.enchantments])
-            return f"{self.name} [{enchant_names}]"
-        return self.name
+            return f"{base_name} [{enchant_names}]"
+        return base_name
 
     def __str__(self):
         return f"{self.get_display_name()} ({self.gold_value}g)"
@@ -92,8 +94,8 @@ class LootTable:
         self.draw_cost = draw_cost
         self.items = []
 
-    def add_item(self, name, weight, gold_value, item_type="misc"):
-        self.items.append(LootItem(name, weight, gold_value, item_type))
+    def add_item(self, name, weight, gold_value, item_type="misc", quantity=1):
+        self.items.append(LootItem(name, weight, gold_value, item_type, quantity))
 
     def remove_item(self, index):
         if 0 <= index < len(self.items):
@@ -101,7 +103,7 @@ class LootTable:
             return True
         return False
 
-    def edit_item(self, index, new_name=None, new_weight=None, new_gold=None, new_type=None):
+    def edit_item(self, index, new_name=None, new_weight=None, new_gold=None, new_type=None, new_quantity=None):
         if 0 <= index < len(self.items):
             if new_name is not None:
                 self.items[index].name = new_name
@@ -111,6 +113,8 @@ class LootTable:
                 self.items[index].gold_value = new_gold
             if new_type is not None:
                 self.items[index].item_type = new_type
+            if new_quantity is not None:
+                self.items[index].quantity = new_quantity
             return True
         return False
 
@@ -176,7 +180,8 @@ class GameSystem:
                                 'name': item.name,
                                 'weight': item.weight,
                                 'gold_value': item.gold_value,
-                                'item_type': item.item_type
+                                'item_type': item.item_type,
+                                'quantity': item.quantity
                             }
                             for item in table.items
                         ]
@@ -193,6 +198,7 @@ class GameSystem:
                                 'weight': item.weight,
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
+                                'quantity': item.quantity,
                                 'enchantments': [
                                     {
                                         'name': ench.name,
@@ -259,7 +265,8 @@ class GameSystem:
                             item_data['name'],
                             item_data['weight'],
                             item_data['gold_value'],
-                            item_data.get('item_type', 'misc')
+                            item_data.get('item_type', 'misc'),
+                            item_data.get('quantity', 1)
                         )
                         table.items.append(item)
                     self.loot_tables.append(table)
@@ -272,7 +279,8 @@ class GameSystem:
                         item_data['name'],
                         item_data['weight'],
                         item_data['gold_value'],
-                        item_data.get('item_type', 'misc')
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1)
                     )
                     table.items.append(item)
                 self.loot_tables.append(table)
@@ -293,7 +301,8 @@ class GameSystem:
                         item_data['name'],
                         item_data['weight'],
                         item_data['gold_value'],
-                        item_data.get('item_type', 'misc')
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1)
                     )
                     # Load enchantments
                     for ench_data in item_data.get('enchantments', []):
@@ -474,16 +483,18 @@ def manage_loot_table(game):
                 continue
 
             try:
+                quantity = int(input("Enter quantity (default 1): ").strip() or "1")
                 weight = float(input("Enter weight: ").strip())
                 gold = int(input("Enter gold value: ").strip())
-                if weight <= 0 or gold < 0:
+                if weight <= 0 or gold < 0 or quantity < 1:
                     print("Invalid values!")
                     continue
 
                 item_type = input("Enter item type (e.g., weapon, armor, misc): ").strip() or "misc"
 
-                current_table.add_item(name, weight, gold, item_type)
-                print(f"✓ Added '{name}' to {current_table.name}")
+                current_table.add_item(name, weight, gold, item_type, quantity)
+                display_name = f"{quantity}x {name}" if quantity > 1 else name
+                print(f"✓ Added '{display_name}' to {current_table.name}")
             except ValueError:
                 print("Invalid input!")
 
@@ -495,7 +506,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.name} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to edit: ").strip())
@@ -504,19 +515,21 @@ def manage_loot_table(game):
                     continue
 
                 item = current_table.items[index]
-                print(f"\nEditing: {item.name}")
+                print(f"\nEditing: {item.get_display_name()}")
                 print("Leave blank to keep current value")
 
                 new_name = input(f"New name [{item.name}]: ").strip()
+                quantity_input = input(f"New quantity [{item.quantity}]: ").strip()
                 weight_input = input(f"New weight [{item.weight}]: ").strip()
                 gold_input = input(f"New gold value [{item.gold_value}]: ").strip()
                 type_input = input(f"New type [{item.item_type}]: ").strip()
 
+                new_quantity = int(quantity_input) if quantity_input else None
                 new_weight = float(weight_input) if weight_input else None
                 new_gold = int(gold_input) if gold_input else None
                 new_type = type_input if type_input else None
 
-                current_table.edit_item(index, new_name if new_name else None, new_weight, new_gold, new_type)
+                current_table.edit_item(index, new_name if new_name else None, new_weight, new_gold, new_type, new_quantity)
                 print(f"✓ Updated item!")
             except ValueError:
                 print("Invalid input!")
@@ -529,7 +542,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.name} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to delete: ").strip())
@@ -537,9 +550,9 @@ def manage_loot_table(game):
                     print("Invalid item number!")
                     continue
 
-                item_name = current_table.items[index].name
+                item_display_name = current_table.items[index].get_display_name()
                 current_table.remove_item(index)
-                print(f"✓ Deleted '{item_name}'")
+                print(f"✓ Deleted '{item_display_name}'")
             except ValueError:
                 print("Invalid input!")
 
@@ -592,7 +605,7 @@ def manage_loot_table(game):
             total_weight = sum(item.weight for item in current_table.items)
             for item in current_table.items:
                 percentage = (item.weight / total_weight) * 100
-                print(f"  - {item.name}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}g")
+                print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}g")
 
         elif choice == "8":
             # View rates for players
@@ -610,7 +623,7 @@ def manage_loot_table(game):
 
             for item in sorted_items:
                 percentage = (item.weight / total_weight) * 100
-                print(f"  {item.name}")
+                print(f"  {item.get_display_name()}")
                 print(f"    Type: {item.item_type}")
                 print(f"    Drop Rate: {percentage:.2f}%")
                 print(f"    Value: {item.gold_value}g")
