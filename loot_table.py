@@ -1355,4 +1355,5 @@ if __name__ == "__main__":
             print("Thanks for using the Loot Table RPG System!")
             break
         else:
+
             print("Invalid choice! Please enter 1-8.")
