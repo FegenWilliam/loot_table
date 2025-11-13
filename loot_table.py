@@ -170,6 +170,24 @@ class Player:
 
         return int(cost)
 
+    def get_double_quantity_chance(self):
+        """Calculate total chance to double item quantity from equipment and upgrades."""
+        total_chance = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "double_quantity_chance":
+                    total_chance += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "double_quantity_chance":
+                    total_chance += effect.value
+
+        return min(100, total_chance)  # Cap at 100%
+
     def add_gold(self, amount):
         self.gold += amount
 
@@ -1128,11 +1146,27 @@ def draw_items_menu(game):
         items = selected_table.draw_multiple(count)
         print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
         print(f"🎲 {player.name} drew {count} items:")
+
+        # Get double quantity chance
+        double_chance = player.get_double_quantity_chance()
+
         total_value = 0
+        doubled_count = 0
+
         for i, item in enumerate(items, 1):
-            print(f"  {i}. {item}")
+            # Check if we should double the quantity
+            if double_chance > 0 and random.random() * 100 < double_chance:
+                item.quantity *= 2
+                doubled_count += 1
+                print(f"  {i}. {item} ✨ DOUBLED!")
+            else:
+                print(f"  {i}. {item}")
+
             player.add_item(item)
             total_value += item.gold_value
+
+        if doubled_count > 0:
+            print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
 
         net_value = total_value - total_cost
         print(f"\nTotal value: {total_value}{game.currency_symbol}")
@@ -1247,7 +1281,8 @@ def manage_crafting(game):
                         print("\nAvailable effect types:")
                         print("  1. Draw cost reduction (flat)")
                         print("  2. Draw cost reduction (percentage)")
-                        effect_choice = input("Choose effect type (1-2, or 'done'): ").strip().lower()
+                        print("  3. Double quantity chance (percentage)")
+                        effect_choice = input("Choose effect type (1-3, or 'done'): ").strip().lower()
 
                         if effect_choice == 'done':
                             break
@@ -1271,6 +1306,18 @@ def manage_crafting(game):
                                     effect = Effect("draw_cost_reduction", value, True)
                                     recipe.add_effect(effect)
                                     print(f"✓ Added effect: -{value}% draw cost")
+                                else:
+                                    print("Value must be between 0 and 100!")
+                            except ValueError:
+                                print("Invalid input!")
+
+                        elif effect_choice == '3':
+                            try:
+                                value = float(input("Enter double quantity chance (0-100): ").strip())
+                                if 0 < value <= 100:
+                                    effect = Effect("double_quantity_chance", value, True)
+                                    recipe.add_effect(effect)
+                                    print(f"✓ Added effect: {value}% chance to double item quantity")
                                 else:
                                     print("Value must be between 0 and 100!")
                             except ValueError:
