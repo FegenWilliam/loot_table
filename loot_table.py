@@ -28,6 +28,9 @@ class LootItem:
     def __str__(self):
         return f"{self.get_display_name()} ({self.gold_value}g)"
 
+    def to_string(self, currency_symbol="g"):
+        return f"{self.get_display_name()} ({self.gold_value}{currency_symbol})"
+
     def __repr__(self):
         return self.__str__()
 
@@ -140,6 +143,8 @@ class GameSystem:
         self.enchantments = []
         self.enchant_cost_item = None
         self.enchant_cost_amount = 1
+        self.currency_name = "gold"  # Configurable currency name
+        self.currency_symbol = "g"  # Configurable currency symbol
         self.save_file = "loot_system_save_new.json"
 
     def get_current_table(self):
@@ -233,7 +238,9 @@ class GameSystem:
                     for ench in self.enchantments
                 ],
                 'enchant_cost_item': self.enchant_cost_item,
-                'enchant_cost_amount': self.enchant_cost_amount
+                'enchant_cost_amount': self.enchant_cost_amount,
+                'currency_name': self.currency_name,
+                'currency_symbol': self.currency_symbol
             }
 
             with open(self.save_file, 'w') as f:
@@ -342,6 +349,10 @@ class GameSystem:
             self.enchant_cost_item = data.get('enchant_cost_item')
             self.enchant_cost_amount = data.get('enchant_cost_amount', 1)
 
+            # Load currency settings
+            self.currency_name = data.get('currency_name', 'gold')
+            self.currency_symbol = data.get('currency_symbol', 'g')
+
             return True
         except Exception as e:
             print(f"Error loading: {e}")
@@ -388,13 +399,14 @@ def show_player_menu():
     print("5. Back to main menu")
 
 
-def show_admin_menu():
+def show_admin_menu(currency_name="gold"):
     print("\n--- ADMIN MENU ---")
-    print("1. Give gold to player")
-    print("2. Take gold from player")
+    print(f"1. Give {currency_name} to player")
+    print(f"2. Take {currency_name} from player")
     print("3. Gift item to player")
     print("4. Take item from player")
-    print("5. Back to main menu")
+    print("5. Change currency settings")
+    print("6. Back to main menu")
 
 
 def show_crafting_menu():
@@ -485,7 +497,7 @@ def manage_loot_table(game):
             try:
                 quantity = int(input("Enter quantity (default 1): ").strip() or "1")
                 weight = float(input("Enter weight: ").strip())
-                gold = int(input("Enter gold value: ").strip())
+                gold = int(input(f"Enter {game.currency_name} value: ").strip())
                 if weight <= 0 or gold < 0 or quantity < 1:
                     print("Invalid values!")
                     continue
@@ -506,7 +518,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}{game.currency_symbol}, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to edit: ").strip())
@@ -521,7 +533,7 @@ def manage_loot_table(game):
                 new_name = input(f"New name [{item.name}]: ").strip()
                 quantity_input = input(f"New quantity [{item.quantity}]: ").strip()
                 weight_input = input(f"New weight [{item.weight}]: ").strip()
-                gold_input = input(f"New gold value [{item.gold_value}]: ").strip()
+                gold_input = input(f"New {game.currency_name} value [{item.gold_value}]: ").strip()
                 type_input = input(f"New type [{item.item_type}]: ").strip()
 
                 new_quantity = int(quantity_input) if quantity_input else None
@@ -542,7 +554,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}{game.currency_symbol}, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to delete: ").strip())
@@ -605,7 +617,7 @@ def manage_loot_table(game):
             total_weight = sum(item.weight for item in current_table.items)
             for item in current_table.items:
                 percentage = (item.weight / total_weight) * 100
-                print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}g")
+                print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}{game.currency_symbol}")
 
         elif choice == "8":
             # View rates for players
@@ -615,7 +627,7 @@ def manage_loot_table(game):
 
             print("\n" + "=" * 50)
             print(f"{current_table.name.upper()} - RATES")
-            print(f"Draw Cost: {current_table.draw_cost}g")
+            print(f"Draw Cost: {current_table.draw_cost}{game.currency_symbol}")
             print("=" * 50)
             total_weight = sum(item.weight for item in current_table.items)
 
@@ -626,7 +638,7 @@ def manage_loot_table(game):
                 print(f"  {item.get_display_name()}")
                 print(f"    Type: {item.item_type}")
                 print(f"    Drop Rate: {percentage:.2f}%")
-                print(f"    Value: {item.gold_value}g")
+                print(f"    Value: {item.gold_value}{game.currency_symbol}")
                 print()
 
         elif choice == "9":
@@ -680,7 +692,7 @@ def manage_players(game):
             player = game.get_player(name)
             if player:
                 print(f"\n--- {player.name} ---")
-                print(f"Gold: {player.gold}g")
+                print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
                 print(f"Inventory ({len(player.inventory)} items):")
                 for i, item in enumerate(player.inventory):
                     print(f"  {i}. {item}")
@@ -694,7 +706,7 @@ def manage_players(game):
 
             print("\nAll Players:")
             for name, player in game.players.items():
-                print(f"  - {name}: {player.gold}g, {len(player.inventory)} items")
+                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items")
 
         elif choice == "5":
             break
@@ -728,7 +740,7 @@ def draw_items_menu(game):
 
         print("\nAvailable players:")
         for name, player in game.players.items():
-            print(f"  - {name} ({player.gold}g)")
+            print(f"  - {name} ({player.gold}{game.currency_symbol})")
 
         player_name = input("\nEnter player name: ").strip()
         player = game.get_player(player_name)
@@ -737,7 +749,7 @@ def draw_items_menu(game):
             print(f"Player '{player_name}' not found!")
             return
 
-        count = int(input(f"How many items to draw? (Cost: {selected_table.draw_cost}g per draw): ").strip())
+        count = int(input(f"How many items to draw? (Cost: {selected_table.draw_cost}{game.currency_symbol} per draw): ").strip())
         if count <= 0:
             print("Count must be greater than 0!")
             return
@@ -745,13 +757,13 @@ def draw_items_menu(game):
         total_cost = count * selected_table.draw_cost
 
         if player.gold < total_cost:
-            print(f"❌ Not enough gold! Need {total_cost}g but {player.name} only has {player.gold}g")
+            print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol} but {player.name} only has {player.gold}{game.currency_symbol}")
             return
 
         player.remove_gold(total_cost)
 
         items = selected_table.draw_multiple(count)
-        print(f"\n💰 Paid {total_cost}g ({count} x {selected_table.draw_cost}g) to {selected_table.name}")
+        print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {selected_table.draw_cost}{game.currency_symbol}) to {selected_table.name}")
         print(f"🎲 {player.name} drew {count} items:")
         total_value = 0
         for i, item in enumerate(items, 1):
@@ -760,9 +772,9 @@ def draw_items_menu(game):
             total_value += item.gold_value
 
         net_value = total_value - total_cost
-        print(f"\nTotal value: {total_value}g")
-        print(f"Net gain/loss: {net_value:+d}g")
-        print(f"{player.name}'s gold: {player.gold}g | Inventory: {len(player.inventory)} items")
+        print(f"\nTotal value: {total_value}{game.currency_symbol}")
+        print(f"Net gain/loss: {net_value:+d}{game.currency_symbol}")
+        print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol} | Inventory: {len(player.inventory)} items")
     except ValueError:
         print("Invalid input!")
 
@@ -774,7 +786,7 @@ def sell_items_menu(game):
 
     print("\nAvailable players:")
     for name, player in game.players.items():
-        print(f"  - {name} ({player.gold}g, {len(player.inventory)} items)")
+        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
 
     player_name = input("\nEnter player name: ").strip()
     player = game.get_player(player_name)
@@ -789,7 +801,7 @@ def sell_items_menu(game):
 
     while True:
         print(f"\n--- {player.name}'s Inventory ---")
-        print(f"Gold: {player.gold}g")
+        print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
         print("\nItems:")
         for i, item in enumerate(player.inventory):
             print(f"  {i}. {item}")
@@ -809,8 +821,8 @@ def sell_items_menu(game):
             item = player.inventory[index]
             player.remove_item(index)
             player.add_gold(item.gold_value)
-            print(f"✓ Sold {item.name} for {item.gold_value}g!")
-            print(f"New gold balance: {player.gold}g")
+            print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
+            print(f"New {game.currency_name} balance: {player.gold}{game.currency_symbol}")
 
             if not player.inventory:
                 print(f"\n{player.name} has sold all items!")
@@ -834,9 +846,9 @@ def manage_crafting(game):
             output_type = input("Enter output item type: ").strip() or "misc"
 
             try:
-                output_gold = int(input("Enter output gold value: ").strip())
+                output_gold = int(input(f"Enter output {game.currency_name} value: ").strip())
                 if output_gold < 0:
-                    print("Invalid gold value!")
+                    print(f"Invalid {game.currency_name} value!")
                     continue
 
                 recipe = CraftingRecipe(output_name, output_type, output_gold)
@@ -994,9 +1006,9 @@ def manage_enchantments(game):
             enchant_type = input("Enter enchantment type (e.g., weapon, armor): ").strip() or "misc"
 
             try:
-                gold_value = int(input("Enter gold value bonus: ").strip())
+                gold_value = int(input(f"Enter {game.currency_name} value bonus: ").strip())
                 if gold_value < 0:
-                    print("Invalid gold value!")
+                    print(f"Invalid {game.currency_name} value!")
                     continue
 
                 weight = float(input("Enter weight (default 1000): ").strip() or "1000")
@@ -1031,7 +1043,7 @@ def manage_enchantments(game):
 
                 new_name = input(f"New name [{ench.name}]: ").strip()
                 new_type = input(f"New type [{ench.enchant_type}]: ").strip()
-                gold_input = input(f"New gold value [{ench.gold_value}]: ").strip()
+                gold_input = input(f"New {game.currency_name} value [{ench.gold_value}]: ").strip()
                 weight_input = input(f"New weight [{ench.weight}]: ").strip()
 
                 if new_name:
@@ -1182,7 +1194,7 @@ def manage_enchantments(game):
 
 def admin_menu(game):
     while True:
-        show_admin_menu()
+        show_admin_menu(game.currency_name)
         choice = input("Enter choice: ").strip()
 
         if choice == "1":
@@ -1197,13 +1209,13 @@ def admin_menu(game):
                 continue
 
             try:
-                amount = int(input("Amount of gold to give: ").strip())
+                amount = int(input(f"Amount of {game.currency_name} to give: ").strip())
                 if amount <= 0:
                     print("Amount must be greater than 0!")
                     continue
 
                 player.add_gold(amount)
-                print(f"✓ Gave {amount}g to {player.name} (now has {player.gold}g)")
+                print(f"✓ Gave {amount}{game.currency_symbol} to {player.name} (now has {player.gold}{game.currency_symbol})")
             except ValueError:
                 print("Invalid amount!")
 
@@ -1219,15 +1231,15 @@ def admin_menu(game):
                 continue
 
             try:
-                amount = int(input(f"Amount of gold to take (has {player.gold}g): ").strip())
+                amount = int(input(f"Amount of {game.currency_name} to take (has {player.gold}{game.currency_symbol}): ").strip())
                 if amount <= 0:
                     print("Amount must be greater than 0!")
                     continue
 
                 if player.remove_gold(amount):
-                    print(f"✓ Took {amount}g from {player.name} (now has {player.gold}g)")
+                    print(f"✓ Took {amount}{game.currency_symbol} from {player.name} (now has {player.gold}{game.currency_symbol})")
                 else:
-                    print(f"Player doesn't have enough gold!")
+                    print(f"Player doesn't have enough {game.currency_name}!")
             except ValueError:
                 print("Invalid amount!")
 
@@ -1299,6 +1311,20 @@ def admin_menu(game):
                 print("Invalid input!")
 
         elif choice == "5":
+            # Change currency settings
+            print(f"\nCurrent currency: {game.currency_name} (symbol: {game.currency_symbol})")
+
+            new_name = input(f"Enter new currency name (leave blank to keep '{game.currency_name}'): ").strip()
+            new_symbol = input(f"Enter new currency symbol (leave blank to keep '{game.currency_symbol}'): ").strip()
+
+            if new_name:
+                game.currency_name = new_name
+            if new_symbol:
+                game.currency_symbol = new_symbol
+
+            print(f"✓ Currency updated: {game.currency_name} (symbol: {game.currency_symbol})")
+
+        elif choice == "6":
             break
 
 
