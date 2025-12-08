@@ -5,6 +5,25 @@ import signal
 import sys
 
 
+class MasterItem:
+    """Defines a master item template with name, type, and base gold value."""
+    def __init__(self, name, item_type, gold_value_per_unit):
+        self.name = name
+        self.item_type = item_type
+        self.gold_value_per_unit = gold_value_per_unit
+
+    def create_loot_item(self, quantity=1, weight=1000):
+        """Create a LootItem instance from this master item."""
+        total_value = self.gold_value_per_unit * quantity
+        return LootItem(self.name, weight, total_value, self.item_type, quantity)
+
+    def __str__(self):
+        return f"{self.name} ({self.item_type}) - {self.gold_value_per_unit}g each"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class LootItem:
     def __init__(self, name, weight, gold_value, item_type="misc", quantity=1, rarity=None):
         self.name = name
@@ -427,6 +446,7 @@ class LootTable:
 
 class GameSystem:
     def __init__(self):
+        self.master_items = []  # Master item registry
         self.loot_tables = []  # List of LootTable objects
         self.current_table_index = 0  # Currently selected table
         self.current_player_name = None  # Currently selected player
@@ -470,10 +490,41 @@ class GameSystem:
             return True
         return False
 
+    def add_master_item(self, name, item_type, gold_value_per_unit):
+        """Add a new master item to the registry."""
+        # Check if item already exists
+        for item in self.master_items:
+            if item.name.lower() == name.lower():
+                return None  # Item already exists
+        master_item = MasterItem(name, item_type, gold_value_per_unit)
+        self.master_items.append(master_item)
+        return master_item
+
+    def get_master_item(self, name):
+        """Get a master item by name."""
+        for item in self.master_items:
+            if item.name.lower() == name.lower():
+                return item
+        return None
+
+    def remove_master_item(self, index):
+        """Remove a master item by index."""
+        if 0 <= index < len(self.master_items):
+            return self.master_items.pop(index)
+        return None
+
     def save_game(self):
         """Save the game state to a JSON file."""
         try:
             data = {
+                'master_items': [
+                    {
+                        'name': item.name,
+                        'item_type': item.item_type,
+                        'gold_value_per_unit': item.gold_value_per_unit
+                    }
+                    for item in self.master_items
+                ],
                 'loot_tables': [
                     {
                         'name': table.name,
@@ -630,6 +681,17 @@ class GameSystem:
         try:
             with open(self.save_file, 'r') as f:
                 data = json.load(f)
+
+            # Load master items
+            self.master_items = []
+            if 'master_items' in data:
+                for item_data in data['master_items']:
+                    master_item = MasterItem(
+                        item_data['name'],
+                        item_data['item_type'],
+                        item_data['gold_value_per_unit']
+                    )
+                    self.master_items.append(master_item)
 
             # Load loot tables (with backward compatibility)
             self.loot_tables = []
@@ -1580,18 +1642,133 @@ def show_main_menu():
     print("=" * 40)
 
 
+def show_master_items_menu():
+    print("\n--- MASTER ITEMS REGISTRY ---")
+    print("1. Add master item")
+    print("2. Edit master item")
+    print("3. Delete master item")
+    print("4. View all master items")
+    print("5. Back to loot table menu")
+
+
+def manage_master_items(game):
+    """Manage the master items registry."""
+    while True:
+        show_master_items_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add master item
+            name = input("Enter item name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            item_type = input("Enter item type (misc/equipment/upgrade/consumable): ").strip()
+            if not item_type:
+                item_type = "misc"
+
+            try:
+                gold_per_unit = int(input("Enter gold value per unit: ").strip())
+                if gold_per_unit < 0:
+                    print("Gold value cannot be negative!")
+                    continue
+
+                result = game.add_master_item(name, item_type, gold_per_unit)
+                if result:
+                    print(f"✓ Added master item: {result}")
+                else:
+                    print(f"Item '{name}' already exists in the registry!")
+            except ValueError:
+                print("Invalid gold value!")
+
+        elif choice == "2":
+            # Edit master item
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print("\nMaster Items:")
+            for i, item in enumerate(game.master_items):
+                print(f"  {i}. {item}")
+
+            try:
+                index = int(input("\nEnter item number to edit: ").strip())
+                if index < 0 or index >= len(game.master_items):
+                    print("Invalid item number!")
+                    continue
+
+                item = game.master_items[index]
+                print(f"\nEditing: {item.name}")
+                print("Leave blank to keep current value")
+
+                new_name = input(f"New name [{item.name}]: ").strip()
+                new_type = input(f"New type [{item.item_type}]: ").strip()
+                new_gold = input(f"New gold per unit [{item.gold_value_per_unit}g]: ").strip()
+
+                if new_name:
+                    item.name = new_name
+                if new_type:
+                    item.item_type = new_type
+                if new_gold:
+                    item.gold_value_per_unit = int(new_gold)
+
+                print(f"✓ Updated: {item}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Delete master item
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print("\nMaster Items:")
+            for i, item in enumerate(game.master_items):
+                print(f"  {i}. {item}")
+
+            try:
+                index = int(input("\nEnter item number to delete: ").strip())
+                deleted = game.remove_master_item(index)
+                if deleted:
+                    print(f"✓ Deleted: {deleted.name}")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # View all master items
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print("MASTER ITEMS REGISTRY")
+            print(f"{'=' * 60}")
+            for i, item in enumerate(game.master_items):
+                print(f"{i}. {item}")
+            print(f"{'=' * 60}")
+
+        elif choice == "5":
+            break
+        else:
+            print("Invalid choice!")
+
+
 def show_loot_menu():
     print("\n--- LOOT TABLE MENU ---")
     print("1. Select/Create loot table")
-    print("2. Add item to current table")
-    print("3. Edit item in current table")
-    print("4. Delete item from current table")
-    print("5. Edit table settings (name, draw cost)")
-    print("6. Delete current table")
-    print("7. View all items in current table (with weights)")
-    print("8. View rates for players (percentages only)")
-    print("9. View all tables")
-    print("10. Back to main menu")
+    print("2. Manage Master Items Registry")
+    print("3. Add item to current table")
+    print("4. Edit item in current table")
+    print("5. Delete item from current table")
+    print("6. Edit table settings (name, draw cost)")
+    print("7. Delete current table")
+    print("8. View all items in current table (with weights)")
+    print("9. View rates for players (percentages only)")
+    print("10. View all tables")
+    print("11. Back to main menu")
 
 
 def show_player_menu():
@@ -2015,11 +2192,54 @@ def manage_loot_table(game):
                     print("Invalid cost!")
 
         elif choice == "2":
+            # Manage Master Items Registry
+            manage_master_items(game)
+
+        elif choice == "3":
             # Add item
             if not current_table:
                 print("No table selected!")
                 continue
 
+            # Check if master items exist
+            if game.master_items:
+                print("\nChoose how to add item:")
+                print("1. From Master Items Registry")
+                print("2. Create custom item (not in registry)")
+                add_choice = input("Choice: ").strip()
+
+                if add_choice == "1":
+                    # Add from master items
+                    print("\nMaster Items:")
+                    for i, master_item in enumerate(game.master_items):
+                        print(f"  {i}. {master_item}")
+
+                    try:
+                        item_index = int(input("\nEnter item number: ").strip())
+                        if item_index < 0 or item_index >= len(game.master_items):
+                            print("Invalid item number!")
+                            continue
+
+                        master_item = game.master_items[item_index]
+                        quantity = int(input("Enter quantity (default 1): ").strip() or "1")
+                        weight = float(input("Enter weight: ").strip())
+
+                        if weight <= 0 or quantity < 1:
+                            print("Invalid values!")
+                            continue
+
+                        loot_item = master_item.create_loot_item(quantity, weight)
+                        current_table.items.append(loot_item)
+                        display_name = f"{quantity}x {master_item.name}" if quantity > 1 else master_item.name
+                        print(f"✓ Added '{display_name}' to {current_table.name}")
+                    except ValueError:
+                        print("Invalid input!")
+                    continue
+                elif add_choice != "2":
+                    print("Invalid choice!")
+                    continue
+
+            # Create custom item
             name = input("Enter item name: ").strip()
             if not name:
                 print("Item name cannot be empty!")
@@ -2041,7 +2261,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "3":
+        elif choice == "4":
             # Edit item
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2077,7 +2297,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "4":
+        elif choice == "5":
             # Delete item
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2099,7 +2319,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "5":
+        elif choice == "6":
             # Edit table settings
             if not current_table:
                 print("No table selected!")
@@ -2121,7 +2341,7 @@ def manage_loot_table(game):
 
             print(f"✓ Updated table settings!")
 
-        elif choice == "6":
+        elif choice == "7":
             # Delete table
             if not current_table:
                 print("No table to delete!")
@@ -2138,7 +2358,7 @@ def manage_loot_table(game):
                 game.current_table_index = min(game.current_table_index, len(game.loot_tables) - 1)
                 print(f"✓ Deleted table '{deleted_name}'")
 
-        elif choice == "7":
+        elif choice == "8":
             # View all items
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2150,7 +2370,7 @@ def manage_loot_table(game):
                 percentage = (item.weight / total_weight) * 100
                 print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}{game.currency_symbol}")
 
-        elif choice == "8":
+        elif choice == "9":
             # View rates for players
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2172,7 +2392,7 @@ def manage_loot_table(game):
                 print(f"    Value: {item.gold_value}{game.currency_symbol}")
                 print()
 
-        elif choice == "9":
+        elif choice == "10":
             # View all tables
             if not game.loot_tables:
                 print("No tables exist!")
@@ -2183,7 +2403,7 @@ def manage_loot_table(game):
                 marker = " <-- CURRENT" if i == game.current_table_index else ""
                 print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}g, Items: {len(table.items)}){marker}")
 
-        elif choice == "10":
+        elif choice == "11":
             break
 
 
