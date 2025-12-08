@@ -172,7 +172,17 @@ class CraftingRecipe:
         self.effects.append(effect)
 
     def __str__(self):
-        ingredient_list = ", ".join(self.ingredients) if self.ingredients else "No ingredients"
+        if not self.ingredients:
+            ingredient_list = "No ingredients"
+        else:
+            # Count ingredients and display as "Nx Item"
+            ingredient_counts = {}
+            for ingredient in self.ingredients:
+                ingredient_counts[ingredient] = ingredient_counts.get(ingredient, 0) + 1
+            ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                               for name, count in ingredient_counts.items()]
+            ingredient_list = ", ".join(ingredient_parts)
+
         effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
         return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g){effects_str} = [{ingredient_list}]"
 
@@ -2697,12 +2707,21 @@ def manage_crafting(game):
 
                 print("\nType 'done' when finished adding ingredients")
                 while True:
-                    ingredient = input("Add ingredient: ").strip()
+                    ingredient = input("Add ingredient (or 'done' to finish): ").strip()
                     if ingredient.lower() == 'done':
                         break
                     if ingredient:
-                        recipe.add_ingredient(ingredient)
-                        print(f"✓ Added {ingredient}")
+                        try:
+                            quantity = int(input(f"How many {ingredient}? ").strip())
+                            if quantity <= 0:
+                                print("Quantity must be at least 1!")
+                                continue
+                            # Add the ingredient the specified number of times
+                            for _ in range(quantity):
+                                recipe.add_ingredient(ingredient)
+                            print(f"✓ Added {quantity}x {ingredient}")
+                        except ValueError:
+                            print("Invalid quantity! Please enter a number.")
 
                 if not recipe.ingredients:
                     print("Recipe must have at least one ingredient!")
