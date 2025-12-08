@@ -245,6 +245,71 @@ class Player:
 
         return min(100, total_chance)  # Cap at 100%
 
+    def get_sell_price_increase(self):
+        """Calculate total sell price increase for non-crafted items from equipment and upgrades."""
+        flat_increase = 0
+        percentage_increase = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        return flat_increase, percentage_increase
+
+    def get_crafted_sell_price_increase(self):
+        """Calculate total sell price increase for crafted items from equipment and upgrades."""
+        flat_increase = 0
+        percentage_increase = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "crafted_sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "crafted_sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        return flat_increase, percentage_increase
+
+    def calculate_item_value(self, base_value, is_crafted=False):
+        """Calculate the actual item value after sell price increases."""
+        if is_crafted:
+            flat, percent = self.get_crafted_sell_price_increase()
+        else:
+            flat, percent = self.get_sell_price_increase()
+
+        # Apply percentage increase first
+        value = base_value * (1 + percent / 100)
+
+        # Then apply flat increase
+        value = value + flat
+
+        return int(value)
+
     def add_gold(self, amount):
         self.gold += amount
 
@@ -829,12 +894,18 @@ def manage_effect_pool(game):
             print("\nAvailable effect types:")
             print("  1. draw_cost_reduction")
             print("  2. double_quantity_chance")
-            effect_type_choice = input("Choose effect type (1-2): ").strip()
+            print("  3. sell_price_increase (for non-crafted items)")
+            print("  4. crafted_sell_price_increase (for crafted items)")
+            effect_type_choice = input("Choose effect type (1-4): ").strip()
 
             if effect_type_choice == '1':
                 effect_type = "draw_cost_reduction"
             elif effect_type_choice == '2':
                 effect_type = "double_quantity_chance"
+            elif effect_type_choice == '3':
+                effect_type = "sell_price_increase"
+            elif effect_type_choice == '4':
+                effect_type = "crafted_sell_price_increase"
             else:
                 print("Invalid effect type!")
                 continue
@@ -973,6 +1044,15 @@ def manage_equipment_upgrades(game):
 
             flat, percent = player.get_total_draw_cost_reduction()
             print(f"Total Draw Cost Reduction: -{flat} flat, -{percent}%")
+
+            double_chance = player.get_double_quantity_chance()
+            print(f"Total Double Quantity Chance: {double_chance}%")
+
+            flat_sell, percent_sell = player.get_sell_price_increase()
+            print(f"Total Sell Price Increase (Non-Crafted): +{flat_sell} flat, +{percent_sell}%")
+
+            flat_craft_sell, percent_craft_sell = player.get_crafted_sell_price_increase()
+            print(f"Total Sell Price Increase (Crafted): +{flat_craft_sell} flat, +{percent_craft_sell}%")
 
             print(f"\nEquipped Items ({len(player.equipped_items)}):")
             if player.equipped_items:
@@ -1470,15 +1550,39 @@ def draw_items_menu(game):
         # Get double quantity chance
         double_chance = player.get_double_quantity_chance()
 
+        # Get sell price increase for non-crafted items
+        flat_price, percent_price = player.get_sell_price_increase()
+
         total_value = 0
         doubled_count = 0
+        price_boosted_count = 0
 
         for i, item in enumerate(items, 1):
+            # Apply sell price increase to non-crafted items
+            price_boosted = False
+            if flat_price > 0 or percent_price > 0:
+                original_value = item.gold_value
+                item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+                if item.gold_value > original_value:
+                    price_boosted_count += 1
+                    price_boosted = True
+
             # Check if we should double the quantity
+            doubled = False
             if double_chance > 0 and random.random() * 100 < double_chance:
                 item.quantity *= 2
                 doubled_count += 1
-                print(f"  {i}. {item} ✨ DOUBLED!")
+                doubled = True
+
+            # Display item with indicators
+            indicators = []
+            if doubled:
+                indicators.append("✨ DOUBLED!")
+            if price_boosted:
+                indicators.append("💰 PRICE BOOST!")
+
+            if indicators:
+                print(f"  {i}. {item} {' '.join(indicators)}")
             else:
                 print(f"  {i}. {item}")
 
@@ -1487,6 +1591,9 @@ def draw_items_menu(game):
 
         if doubled_count > 0:
             print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+
+        if price_boosted_count > 0:
+            print(f"💰 {price_boosted_count} item(s) had their value increased! (+{flat_price} flat, +{percent_price}%)")
 
         net_value = total_value - total_cost
         print(f"\nTotal value: {total_value}{game.currency_symbol}")
@@ -1746,6 +1853,14 @@ def manage_crafting(game):
                             print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
                     else:
                         print(f"✓ Crafted {recipe.output_name}!")
+
+                    # Apply crafted sell price increase
+                    flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
+                    if flat_craft_price > 0 or percent_craft_price > 0:
+                        original_craft_value = crafted_item.gold_value
+                        crafted_item.gold_value = player.calculate_item_value(original_craft_value, is_crafted=True)
+                        if crafted_item.gold_value > original_craft_value:
+                            print(f"💰 Crafted item value increased: {original_craft_value}{game.currency_symbol} → {crafted_item.gold_value}{game.currency_symbol} (+{flat_craft_price} flat, +{percent_craft_price}%)")
 
                     player.add_item(crafted_item)
                     crafted_count += 1
