@@ -1669,18 +1669,18 @@ def manage_master_items(game):
                 item_type = "misc"
 
             try:
-                gold_per_unit = int(input("Enter gold value per unit: ").strip())
+                gold_per_unit = int(input(f"Enter {game.currency_name} value per unit: ").strip())
                 if gold_per_unit < 0:
-                    print("Gold value cannot be negative!")
+                    print(f"{game.currency_name.capitalize()} value cannot be negative!")
                     continue
 
                 result = game.add_master_item(name, item_type, gold_per_unit)
                 if result:
-                    print(f"✓ Added master item: {result}")
+                    print(f"✓ Added master item: {result.name} ({result.item_type}) - {result.gold_value_per_unit}{game.currency_symbol} each")
                 else:
                     print(f"Item '{name}' already exists in the registry!")
             except ValueError:
-                print("Invalid gold value!")
+                print(f"Invalid {game.currency_name} value!")
 
         elif choice == "2":
             # Edit master item
@@ -1690,7 +1690,7 @@ def manage_master_items(game):
 
             print("\nMaster Items:")
             for i, item in enumerate(game.master_items):
-                print(f"  {i}. {item}")
+                print(f"  {i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
 
             try:
                 index = int(input("\nEnter item number to edit: ").strip())
@@ -1704,7 +1704,7 @@ def manage_master_items(game):
 
                 new_name = input(f"New name [{item.name}]: ").strip()
                 new_type = input(f"New type [{item.item_type}]: ").strip()
-                new_gold = input(f"New gold per unit [{item.gold_value_per_unit}g]: ").strip()
+                new_gold = input(f"New {game.currency_name} per unit [{item.gold_value_per_unit}{game.currency_symbol}]: ").strip()
 
                 if new_name:
                     item.name = new_name
@@ -1713,7 +1713,7 @@ def manage_master_items(game):
                 if new_gold:
                     item.gold_value_per_unit = int(new_gold)
 
-                print(f"✓ Updated: {item}")
+                print(f"✓ Updated: {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
             except ValueError:
                 print("Invalid input!")
 
@@ -1725,7 +1725,7 @@ def manage_master_items(game):
 
             print("\nMaster Items:")
             for i, item in enumerate(game.master_items):
-                print(f"  {i}. {item}")
+                print(f"  {i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
 
             try:
                 index = int(input("\nEnter item number to delete: ").strip())
@@ -1747,7 +1747,7 @@ def manage_master_items(game):
             print("MASTER ITEMS REGISTRY")
             print(f"{'=' * 60}")
             for i, item in enumerate(game.master_items):
-                print(f"{i}. {item}")
+                print(f"{i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
             print(f"{'=' * 60}")
 
         elif choice == "5":
@@ -2143,7 +2143,7 @@ def manage_loot_table(game):
         current_table = game.get_current_table()
         if current_table:
             print(
-                f"\n[Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}g, Items: {len(current_table.items)})]")
+                f"\n[Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}{game.currency_symbol}, Items: {len(current_table.items)})]")
         else:
             print("\n[No tables exist! Please create one]")
 
@@ -2156,7 +2156,7 @@ def manage_loot_table(game):
                 print("\nExisting tables:")
                 for i, table in enumerate(game.loot_tables):
                     marker = " <--" if i == game.current_table_index else ""
-                    print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}g, Items: {len(table.items)}){marker}")
+                    print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}{game.currency_symbol}, Items: {len(table.items)}){marker}")
 
                 print("\nEnter table number to select, or 'new' to create new table")
                 selection = input("Choice: ").strip().lower()
@@ -2212,7 +2212,7 @@ def manage_loot_table(game):
                     # Add from master items
                     print("\nMaster Items:")
                     for i, master_item in enumerate(game.master_items):
-                        print(f"  {i}. {master_item}")
+                        print(f"  {i}. {master_item.name} ({master_item.item_type}) - {master_item.gold_value_per_unit}{game.currency_symbol} each")
 
                     try:
                         item_index = int(input("\nEnter item number: ").strip())
@@ -2401,7 +2401,7 @@ def manage_loot_table(game):
             print("\nAll Loot Tables:")
             for i, table in enumerate(game.loot_tables):
                 marker = " <-- CURRENT" if i == game.current_table_index else ""
-                print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}g, Items: {len(table.items)}){marker}")
+                print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}{game.currency_symbol}, Items: {len(table.items)}){marker}")
 
         elif choice == "11":
             break
