@@ -6,25 +6,51 @@ import sys
 
 
 class LootItem:
-    def __init__(self, name, weight, gold_value, item_type="misc"):
+    def __init__(self, name, weight, gold_value, item_type="misc", quantity=1, rarity=None):
         self.name = name
         self.weight = weight
         self.gold_value = gold_value
         self.item_type = item_type
+        self.quantity = quantity
+        self.rarity = rarity  # For Equipment items: Normal, Rare, Epic, Legendary
         self.enchantments = []
+        self.effects = []  # For Equipment and Upgrade items
 
     def add_enchantment(self, enchantment):
         self.enchantments.append(enchantment)
         self.gold_value += enchantment.gold_value
 
+    def add_effect(self, effect):
+        self.effects.append(effect)
+
     def get_display_name(self):
+        base_name = f"{self.quantity}x {self.name}" if self.quantity > 1 else self.name
+
+        # Add rarity prefix for Equipment items
+        if self.rarity:
+            base_name = f"[{self.rarity}] {base_name}"
+
         if self.enchantments:
             enchant_names = ", ".join([e.name for e in self.enchantments])
-            return f"{self.name} [{enchant_names}]"
-        return self.name
+            return f"{base_name} [{enchant_names}]"
+        return base_name
+
+    def get_effects_display(self):
+        if not self.effects:
+            return ""
+        effect_strs = []
+        for effect in self.effects:
+            if effect.is_percentage:
+                effect_strs.append(f"-{effect.value}%")
+            else:
+                effect_strs.append(f"-{effect.value}")
+        return f" (Effects: {', '.join(effect_strs)})"
 
     def __str__(self):
         return f"{self.get_display_name()} ({self.gold_value}g)"
+
+    def to_string(self, currency_symbol="g"):
+        return f"{self.get_display_name()} ({self.gold_value}{currency_symbol})"
 
     def __repr__(self):
         return self.__str__()
@@ -44,19 +70,91 @@ class Enchantment:
         return self.__str__()
 
 
+class Effect:
+    def __init__(self, effect_type, value, is_percentage=False):
+        self.effect_type = effect_type  # e.g., "draw_cost_reduction"
+        self.value = value  # numeric value
+        self.is_percentage = is_percentage  # True for %, False for flat
+
+    def __str__(self):
+        if self.is_percentage:
+            return f"{self.effect_type}: -{self.value}%"
+        else:
+            return f"{self.effect_type}: -{self.value}"
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class EffectTemplate:
+    """Template for effects that can be rolled when crafting Equipment/Upgrades."""
+    def __init__(self, name, effect_type, value, is_percentage=False, weight=1000):
+        self.name = name
+        self.effect_type = effect_type
+        self.value = value
+        self.is_percentage = is_percentage
+        self.weight = weight
+
+    def create_effect(self):
+        """Create an Effect instance from this template."""
+        return Effect(self.effect_type, self.value, self.is_percentage)
+
+    def __str__(self):
+        if self.is_percentage:
+            return f"{self.name}: {self.effect_type} -{self.value}% (weight: {self.weight})"
+        else:
+            return f"{self.name}: {self.effect_type} -{self.value} (weight: {self.weight})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class RaritySystem:
+    def __init__(self):
+        # Define rarities with their weights and effect slots
+        self.rarities = {
+            "Normal": {"weight": 500, "max_effects": 1},
+            "Rare": {"weight": 300, "max_effects": 2},
+            "Epic": {"weight": 150, "max_effects": 3},
+            "Legendary": {"weight": 50, "max_effects": 5}
+        }
+
+    def roll_rarity(self):
+        """Roll a random rarity based on weights."""
+        rarity_names = list(self.rarities.keys())
+        weights = [self.rarities[r]["weight"] for r in rarity_names]
+        return random.choices(rarity_names, weights=weights, k=1)[0]
+
+    def get_max_effects(self, rarity):
+        """Get the maximum number of effects for a given rarity."""
+        return self.rarities.get(rarity, {}).get("max_effects", 1)
+
+    def set_weight(self, rarity, weight):
+        """Set the weight for a specific rarity."""
+        if rarity in self.rarities:
+            self.rarities[rarity]["weight"] = weight
+            return True
+        return False
+
+
 class CraftingRecipe:
     def __init__(self, output_name, output_type, output_gold_value):
         self.output_name = output_name
         self.output_type = output_type
         self.output_gold_value = output_gold_value
         self.ingredients = []
+        self.effects = []  # Effects for Equipment/Upgrade items
 
     def add_ingredient(self, item_name):
         self.ingredients.append(item_name)
 
+    def add_effect(self, effect):
+        self.effects.append(effect)
+
     def __str__(self):
         ingredient_list = ", ".join(self.ingredients) if self.ingredients else "No ingredients"
-        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g) = [{ingredient_list}]"
+        effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
+        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g){effects_str} = [{ingredient_list}]"
 
     def __repr__(self):
         return self.__str__()
@@ -67,6 +165,8 @@ class Player:
         self.name = name
         self.gold = 0
         self.inventory = []
+        self.equipped_items = []  # Items currently equipped
+        self.consumed_upgrades = []  # Upgrades that have been consumed
 
     def add_item(self, item):
         self.inventory.append(item)
@@ -75,6 +175,75 @@ class Player:
         if 0 <= index < len(self.inventory):
             return self.inventory.pop(index)
         return None
+
+    def equip_item(self, item):
+        """Equip an equipment item."""
+        self.equipped_items.append(item)
+
+    def unequip_item(self, index):
+        """Unequip an equipment item and return it."""
+        if 0 <= index < len(self.equipped_items):
+            return self.equipped_items.pop(index)
+        return None
+
+    def consume_upgrade(self, item):
+        """Consume an upgrade item permanently."""
+        self.consumed_upgrades.append(item)
+
+    def get_total_draw_cost_reduction(self):
+        """Calculate total draw cost reduction from equipment and upgrades."""
+        flat_reduction = 0
+        percentage_reduction = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "draw_cost_reduction":
+                    if effect.is_percentage:
+                        percentage_reduction += effect.value
+                    else:
+                        flat_reduction += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "draw_cost_reduction":
+                    if effect.is_percentage:
+                        percentage_reduction += effect.value
+                    else:
+                        flat_reduction += effect.value
+
+        return flat_reduction, percentage_reduction
+
+    def calculate_draw_cost(self, base_cost):
+        """Calculate the actual draw cost after reductions."""
+        flat, percent = self.get_total_draw_cost_reduction()
+
+        # Apply percentage reduction first
+        cost = base_cost * (1 - percent / 100)
+
+        # Then apply flat reduction
+        cost = max(0, cost - flat)  # Don't go below 0
+
+        return int(cost)
+
+    def get_double_quantity_chance(self):
+        """Calculate total chance to double item quantity from equipment and upgrades."""
+        total_chance = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "double_quantity_chance":
+                    total_chance += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "double_quantity_chance":
+                    total_chance += effect.value
+
+        return min(100, total_chance)  # Cap at 100%
 
     def add_gold(self, amount):
         self.gold += amount
@@ -92,8 +261,8 @@ class LootTable:
         self.draw_cost = draw_cost
         self.items = []
 
-    def add_item(self, name, weight, gold_value, item_type="misc"):
-        self.items.append(LootItem(name, weight, gold_value, item_type))
+    def add_item(self, name, weight, gold_value, item_type="misc", quantity=1):
+        self.items.append(LootItem(name, weight, gold_value, item_type, quantity))
 
     def remove_item(self, index):
         if 0 <= index < len(self.items):
@@ -101,7 +270,7 @@ class LootTable:
             return True
         return False
 
-    def edit_item(self, index, new_name=None, new_weight=None, new_gold=None, new_type=None):
+    def edit_item(self, index, new_name=None, new_weight=None, new_gold=None, new_type=None, new_quantity=None):
         if 0 <= index < len(self.items):
             if new_name is not None:
                 self.items[index].name = new_name
@@ -111,6 +280,8 @@ class LootTable:
                 self.items[index].gold_value = new_gold
             if new_type is not None:
                 self.items[index].item_type = new_type
+            if new_quantity is not None:
+                self.items[index].quantity = new_quantity
             return True
         return False
 
@@ -136,6 +307,11 @@ class GameSystem:
         self.enchantments = []
         self.enchant_cost_item = None
         self.enchant_cost_amount = 1
+        self.effect_templates = []  # Pool of effects that can be rolled
+        self.effect_cost = 100  # Currency cost to roll for an effect
+        self.currency_name = "gold"  # Configurable currency name
+        self.currency_symbol = "g"  # Configurable currency symbol
+        self.rarity_system = RaritySystem()  # Rarity system for equipment
         self.save_file = "loot_system_save_new.json"
 
     def get_current_table(self):
@@ -176,7 +352,9 @@ class GameSystem:
                                 'name': item.name,
                                 'weight': item.weight,
                                 'gold_value': item.gold_value,
-                                'item_type': item.item_type
+                                'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'rarity': item.rarity
                             }
                             for item in table.items
                         ]
@@ -193,6 +371,8 @@ class GameSystem:
                                 'weight': item.weight,
                                 'gold_value': item.gold_value,
                                 'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'rarity': item.rarity,
                                 'enchantments': [
                                     {
                                         'name': ench.name,
@@ -201,9 +381,55 @@ class GameSystem:
                                         'weight': ench.weight
                                     }
                                     for ench in item.enchantments
+                                ],
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
                                 ]
                             }
                             for item in player.inventory
+                        ],
+                        'equipped_items': [
+                            {
+                                'name': item.name,
+                                'weight': item.weight,
+                                'gold_value': item.gold_value,
+                                'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'rarity': item.rarity,
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
+                                ]
+                            }
+                            for item in player.equipped_items
+                        ],
+                        'consumed_upgrades': [
+                            {
+                                'name': item.name,
+                                'weight': item.weight,
+                                'gold_value': item.gold_value,
+                                'item_type': item.item_type,
+                                'quantity': item.quantity,
+                                'rarity': item.rarity,
+                                'effects': [
+                                    {
+                                        'effect_type': eff.effect_type,
+                                        'value': eff.value,
+                                        'is_percentage': eff.is_percentage
+                                    }
+                                    for eff in item.effects
+                                ]
+                            }
+                            for item in player.consumed_upgrades
                         ]
                     }
                     for name, player in self.players.items()
@@ -213,7 +439,15 @@ class GameSystem:
                         'output_name': recipe.output_name,
                         'output_type': recipe.output_type,
                         'output_gold_value': recipe.output_gold_value,
-                        'ingredients': recipe.ingredients
+                        'ingredients': recipe.ingredients,
+                        'effects': [
+                            {
+                                'effect_type': eff.effect_type,
+                                'value': eff.value,
+                                'is_percentage': eff.is_percentage
+                            }
+                            for eff in recipe.effects
+                        ]
                     }
                     for recipe in self.crafting_recipes
                 ],
@@ -227,7 +461,24 @@ class GameSystem:
                     for ench in self.enchantments
                 ],
                 'enchant_cost_item': self.enchant_cost_item,
-                'enchant_cost_amount': self.enchant_cost_amount
+                'enchant_cost_amount': self.enchant_cost_amount,
+                'effect_templates': [
+                    {
+                        'name': eff_tmpl.name,
+                        'effect_type': eff_tmpl.effect_type,
+                        'value': eff_tmpl.value,
+                        'is_percentage': eff_tmpl.is_percentage,
+                        'weight': eff_tmpl.weight
+                    }
+                    for eff_tmpl in self.effect_templates
+                ],
+                'effect_cost': self.effect_cost,
+                'currency_name': self.currency_name,
+                'currency_symbol': self.currency_symbol,
+                'rarity_weights': {
+                    rarity: data['weight']
+                    for rarity, data in self.rarity_system.rarities.items()
+                }
             }
 
             with open(self.save_file, 'w') as f:
@@ -259,7 +510,9 @@ class GameSystem:
                             item_data['name'],
                             item_data['weight'],
                             item_data['gold_value'],
-                            item_data.get('item_type', 'misc')
+                            item_data.get('item_type', 'misc'),
+                            item_data.get('quantity', 1),
+                            item_data.get('rarity')
                         )
                         table.items.append(item)
                     self.loot_tables.append(table)
@@ -272,7 +525,9 @@ class GameSystem:
                         item_data['name'],
                         item_data['weight'],
                         item_data['gold_value'],
-                        item_data.get('item_type', 'misc')
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     table.items.append(item)
                 self.loot_tables.append(table)
@@ -288,12 +543,16 @@ class GameSystem:
             for name, player_data in data.get('players', {}).items():
                 player = Player(name)
                 player.gold = player_data['gold']
-                for item_data in player_data['inventory']:
+
+                # Load inventory
+                for item_data in player_data.get('inventory', []):
                     item = LootItem(
                         item_data['name'],
                         item_data['weight'],
                         item_data['gold_value'],
-                        item_data.get('item_type', 'misc')
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
                     )
                     # Load enchantments
                     for ench_data in item_data.get('enchantments', []):
@@ -304,7 +563,56 @@ class GameSystem:
                             ench_data.get('weight', 1000)
                         )
                         item.enchantments.append(ench)
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
                     player.add_item(item)
+
+                # Load equipped items
+                for item_data in player_data.get('equipped_items', []):
+                    item = LootItem(
+                        item_data['name'],
+                        item_data['weight'],
+                        item_data['gold_value'],
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
+                    )
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
+                    player.equip_item(item)
+
+                # Load consumed upgrades
+                for item_data in player_data.get('consumed_upgrades', []):
+                    item = LootItem(
+                        item_data['name'],
+                        item_data['weight'],
+                        item_data['gold_value'],
+                        item_data.get('item_type', 'misc'),
+                        item_data.get('quantity', 1),
+                        item_data.get('rarity')
+                    )
+                    # Load effects
+                    for eff_data in item_data.get('effects', []):
+                        eff = Effect(
+                            eff_data['effect_type'],
+                            eff_data['value'],
+                            eff_data.get('is_percentage', False)
+                        )
+                        item.add_effect(eff)
+                    player.consume_upgrade(item)
+
                 self.players[name] = player
 
             # Load crafting recipes
@@ -316,6 +624,14 @@ class GameSystem:
                     recipe_data['output_gold_value']
                 )
                 recipe.ingredients = recipe_data['ingredients']
+                # Load effects
+                for eff_data in recipe_data.get('effects', []):
+                    eff = Effect(
+                        eff_data['effect_type'],
+                        eff_data['value'],
+                        eff_data.get('is_percentage', False)
+                    )
+                    recipe.add_effect(eff)
                 self.crafting_recipes.append(recipe)
 
             # Load enchantments
@@ -332,6 +648,30 @@ class GameSystem:
             # Load global enchantment cost
             self.enchant_cost_item = data.get('enchant_cost_item')
             self.enchant_cost_amount = data.get('enchant_cost_amount', 1)
+
+            # Load effect templates
+            self.effect_templates = []
+            for eff_tmpl_data in data.get('effect_templates', []):
+                eff_tmpl = EffectTemplate(
+                    eff_tmpl_data['name'],
+                    eff_tmpl_data['effect_type'],
+                    eff_tmpl_data['value'],
+                    eff_tmpl_data.get('is_percentage', False),
+                    eff_tmpl_data.get('weight', 1000)
+                )
+                self.effect_templates.append(eff_tmpl)
+
+            # Load effect cost
+            self.effect_cost = data.get('effect_cost', 100)
+
+            # Load currency settings
+            self.currency_name = data.get('currency_name', 'gold')
+            self.currency_symbol = data.get('currency_symbol', 'g')
+
+            # Load rarity weights
+            if 'rarity_weights' in data:
+                for rarity, weight in data['rarity_weights'].items():
+                    self.rarity_system.set_weight(rarity, weight)
 
             return True
         except Exception as e:
@@ -350,9 +690,10 @@ def show_main_menu():
     print("3. Draw Items")
     print("4. Sell Items")
     print("5. Crafting Menu")
-    print("6. Admin Menu")
-    print("7. Save Game")
-    print("8. Exit")
+    print("6. Equipment & Upgrades")
+    print("7. Admin Menu")
+    print("8. Save Game")
+    print("9. Exit")
     print("=" * 40)
 
 
@@ -379,13 +720,16 @@ def show_player_menu():
     print("5. Back to main menu")
 
 
-def show_admin_menu():
+def show_admin_menu(currency_name="gold"):
     print("\n--- ADMIN MENU ---")
-    print("1. Give gold to player")
-    print("2. Take gold from player")
+    print(f"1. Give {currency_name} to player")
+    print(f"2. Take {currency_name} from player")
     print("3. Gift item to player")
     print("4. Take item from player")
-    print("5. Back to main menu")
+    print("5. Change currency settings")
+    print("6. Configure rarity weights")
+    print("7. Manage effect pool")
+    print("8. Back to main menu")
 
 
 def show_crafting_menu():
@@ -398,6 +742,16 @@ def show_crafting_menu():
     print("6. Back to main menu")
 
 
+def show_effect_pool_menu():
+    print("\n--- EFFECT POOL MENU ---")
+    print("1. Add effect template")
+    print("2. Edit effect template")
+    print("3. Delete effect template")
+    print("4. View all effect templates")
+    print("5. Set effect roll cost")
+    print("6. Back to admin menu")
+
+
 def show_enchantment_menu():
     print("\n--- ENCHANTMENT MENU ---")
     print("1. Add enchantment")
@@ -407,6 +761,300 @@ def show_enchantment_menu():
     print("5. View all enchantments")
     print("6. Enchant item (player)")
     print("7. Back to crafting menu")
+
+
+def show_equipment_menu():
+    print("\n--- EQUIPMENT & UPGRADES MENU ---")
+    print("1. View player equipment & upgrades")
+    print("2. Equip item")
+    print("3. Unequip item")
+    print("4. Consume upgrade")
+    print("5. Back to main menu")
+
+
+def manage_effect_pool(game):
+    """Manage the pool of effect templates that can be rolled when crafting."""
+    while True:
+        show_effect_pool_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add effect template
+            name = input("Enter effect template name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            print("\nAvailable effect types:")
+            print("  1. draw_cost_reduction")
+            print("  2. double_quantity_chance")
+            effect_type_choice = input("Choose effect type (1-2): ").strip()
+
+            if effect_type_choice == '1':
+                effect_type = "draw_cost_reduction"
+            elif effect_type_choice == '2':
+                effect_type = "double_quantity_chance"
+            else:
+                print("Invalid effect type!")
+                continue
+
+            try:
+                value = float(input("Enter effect value: ").strip())
+                if value <= 0:
+                    print("Value must be greater than 0!")
+                    continue
+
+                is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
+                is_percentage = is_percentage_input == 'y'
+
+                weight = float(input("Enter weight (default 1000): ").strip() or "1000")
+                if weight <= 0:
+                    print("Weight must be greater than 0!")
+                    continue
+
+                effect_tmpl = EffectTemplate(name, effect_type, value, is_percentage, weight)
+                game.effect_templates.append(effect_tmpl)
+                print(f"✓ Added effect template: {effect_tmpl}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "2":
+            # Edit effect template
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print("\nCurrent effect templates:")
+            for i, tmpl in enumerate(game.effect_templates):
+                print(f"  {i}. {tmpl}")
+
+            try:
+                index = int(input("\nEnter effect template number to edit: ").strip())
+                if index < 0 or index >= len(game.effect_templates):
+                    print("Invalid template number!")
+                    continue
+
+                tmpl = game.effect_templates[index]
+                print(f"\nEditing: {tmpl.name}")
+                print("Leave blank to keep current value")
+
+                new_name = input(f"New name [{tmpl.name}]: ").strip()
+                weight_input = input(f"New weight [{tmpl.weight}]: ").strip()
+                value_input = input(f"New value [{tmpl.value}]: ").strip()
+
+                if new_name:
+                    tmpl.name = new_name
+                if weight_input:
+                    tmpl.weight = float(weight_input)
+                if value_input:
+                    tmpl.value = float(value_input)
+
+                print(f"✓ Updated effect template!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Delete effect template
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print("\nCurrent effect templates:")
+            for i, tmpl in enumerate(game.effect_templates):
+                print(f"  {i}. {tmpl}")
+
+            try:
+                index = int(input("\nEnter effect template number to delete: ").strip())
+                if 0 <= index < len(game.effect_templates):
+                    deleted = game.effect_templates.pop(index)
+                    print(f"✓ Deleted effect template: {deleted.name}")
+                else:
+                    print("Invalid template number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # View all effect templates
+            if not game.effect_templates:
+                print("No effect templates exist!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print(f"Effect Roll Cost: {game.effect_cost}{game.currency_symbol}")
+            print(f"{'=' * 60}")
+            print("\nAll Effect Templates:")
+            total_weight = sum(t.weight for t in game.effect_templates)
+            for i, tmpl in enumerate(game.effect_templates):
+                percentage = (tmpl.weight / total_weight) * 100
+                print(f"  {i}. {tmpl.name}: {tmpl.effect_type}")
+                if tmpl.is_percentage:
+                    print(f"      Value: {tmpl.value}%")
+                else:
+                    print(f"      Value: {tmpl.value}")
+                print(f"      Weight: {tmpl.weight} ({percentage:.2f}%)")
+                print()
+
+        elif choice == "5":
+            # Set effect roll cost
+            print(f"\nCurrent effect roll cost: {game.effect_cost}{game.currency_symbol}")
+            try:
+                new_cost = int(input(f"Enter new cost (in {game.currency_name}): ").strip())
+                if new_cost < 0:
+                    print("Cost cannot be negative!")
+                    continue
+                game.effect_cost = new_cost
+                print(f"✓ Effect roll cost set to {game.effect_cost}{game.currency_symbol}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "6":
+            break
+
+
+def manage_equipment_upgrades(game):
+    while True:
+        show_equipment_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # View player equipment & upgrades
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            print(f"\n--- {player.name}'s Equipment & Upgrades ---")
+
+            flat, percent = player.get_total_draw_cost_reduction()
+            print(f"Total Draw Cost Reduction: -{flat} flat, -{percent}%")
+
+            print(f"\nEquipped Items ({len(player.equipped_items)}):")
+            if player.equipped_items:
+                for i, item in enumerate(player.equipped_items):
+                    effects_str = ", ".join([str(e) for e in item.effects])
+                    print(f"  {i}. {item.name} [{effects_str}]")
+            else:
+                print("  (none)")
+
+            print(f"\nConsumed Upgrades ({len(player.consumed_upgrades)}):")
+            if player.consumed_upgrades:
+                for item in player.consumed_upgrades:
+                    effects_str = ", ".join([str(e) for e in item.effects])
+                    print(f"  - {item.name} [{effects_str}]")
+            else:
+                print("  (none)")
+
+        elif choice == "2":
+            # Equip item
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            # Filter for Equipment items in inventory
+            equipment_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "equipment"]
+
+            if not equipment_items:
+                print(f"{player.name} has no equipment items to equip!")
+                continue
+
+            print(f"\n{player.name}'s Equipment Items:")
+            for idx, (inv_idx, item) in enumerate(equipment_items):
+                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                print(f"  {idx}. {item.name} [{effects_str}]")
+
+            try:
+                choice_idx = int(input("\nEnter item number to equip: ").strip())
+                if 0 <= choice_idx < len(equipment_items):
+                    inv_idx, item = equipment_items[choice_idx]
+                    player.remove_item(inv_idx)
+                    player.equip_item(item)
+                    print(f"✓ Equipped {item.name}!")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Unequip item
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            if not player.equipped_items:
+                print(f"{player.name} has no equipped items!")
+                continue
+
+            print(f"\n{player.name}'s Equipped Items:")
+            for i, item in enumerate(player.equipped_items):
+                effects_str = ", ".join([str(e) for e in item.effects])
+                print(f"  {i}. {item.name} [{effects_str}]")
+
+            try:
+                index = int(input("\nEnter item number to unequip: ").strip())
+                item = player.unequip_item(index)
+                if item:
+                    player.add_item(item)
+                    print(f"✓ Unequipped {item.name}!")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # Consume upgrade
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            name = input("Enter player name: ").strip()
+            player = game.get_player(name)
+            if not player:
+                print(f"Player '{name}' not found!")
+                continue
+
+            # Filter for Upgrade items in inventory
+            upgrade_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "upgrade"]
+
+            if not upgrade_items:
+                print(f"{player.name} has no upgrade items to consume!")
+                continue
+
+            print(f"\n{player.name}'s Upgrade Items:")
+            for idx, (inv_idx, item) in enumerate(upgrade_items):
+                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                print(f"  {idx}. {item.name} [{effects_str}]")
+
+            try:
+                choice_idx = int(input("\nEnter item number to consume: ").strip())
+                if 0 <= choice_idx < len(upgrade_items):
+                    inv_idx, item = upgrade_items[choice_idx]
+                    player.remove_item(inv_idx)
+                    player.consume_upgrade(item)
+                    print(f"✓ Consumed {item.name}! Effects are now permanently applied.")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "5":
+            break
 
 
 def manage_loot_table(game):
@@ -474,16 +1122,18 @@ def manage_loot_table(game):
                 continue
 
             try:
+                quantity = int(input("Enter quantity (default 1): ").strip() or "1")
                 weight = float(input("Enter weight: ").strip())
-                gold = int(input("Enter gold value: ").strip())
-                if weight <= 0 or gold < 0:
+                gold = int(input(f"Enter {game.currency_name} value: ").strip())
+                if weight <= 0 or gold < 0 or quantity < 1:
                     print("Invalid values!")
                     continue
 
                 item_type = input("Enter item type (e.g., weapon, armor, misc): ").strip() or "misc"
 
-                current_table.add_item(name, weight, gold, item_type)
-                print(f"✓ Added '{name}' to {current_table.name}")
+                current_table.add_item(name, weight, gold, item_type, quantity)
+                display_name = f"{quantity}x {name}" if quantity > 1 else name
+                print(f"✓ Added '{display_name}' to {current_table.name}")
             except ValueError:
                 print("Invalid input!")
 
@@ -495,7 +1145,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.name} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}{game.currency_symbol}, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to edit: ").strip())
@@ -504,19 +1154,21 @@ def manage_loot_table(game):
                     continue
 
                 item = current_table.items[index]
-                print(f"\nEditing: {item.name}")
+                print(f"\nEditing: {item.get_display_name()}")
                 print("Leave blank to keep current value")
 
                 new_name = input(f"New name [{item.name}]: ").strip()
+                quantity_input = input(f"New quantity [{item.quantity}]: ").strip()
                 weight_input = input(f"New weight [{item.weight}]: ").strip()
-                gold_input = input(f"New gold value [{item.gold_value}]: ").strip()
+                gold_input = input(f"New {game.currency_name} value [{item.gold_value}]: ").strip()
                 type_input = input(f"New type [{item.item_type}]: ").strip()
 
+                new_quantity = int(quantity_input) if quantity_input else None
                 new_weight = float(weight_input) if weight_input else None
                 new_gold = int(gold_input) if gold_input else None
                 new_type = type_input if type_input else None
 
-                current_table.edit_item(index, new_name if new_name else None, new_weight, new_gold, new_type)
+                current_table.edit_item(index, new_name if new_name else None, new_weight, new_gold, new_type, new_quantity)
                 print(f"✓ Updated item!")
             except ValueError:
                 print("Invalid input!")
@@ -529,7 +1181,7 @@ def manage_loot_table(game):
 
             print("\nCurrent items:")
             for i, item in enumerate(current_table.items):
-                print(f"  {i}. {item.name} (weight: {item.weight}, value: {item.gold_value}g, type: {item.item_type})")
+                print(f"  {i}. {item.get_display_name()} (weight: {item.weight}, value: {item.gold_value}{game.currency_symbol}, type: {item.item_type})")
 
             try:
                 index = int(input("\nEnter item number to delete: ").strip())
@@ -537,9 +1189,9 @@ def manage_loot_table(game):
                     print("Invalid item number!")
                     continue
 
-                item_name = current_table.items[index].name
+                item_display_name = current_table.items[index].get_display_name()
                 current_table.remove_item(index)
-                print(f"✓ Deleted '{item_name}'")
+                print(f"✓ Deleted '{item_display_name}'")
             except ValueError:
                 print("Invalid input!")
 
@@ -592,7 +1244,7 @@ def manage_loot_table(game):
             total_weight = sum(item.weight for item in current_table.items)
             for item in current_table.items:
                 percentage = (item.weight / total_weight) * 100
-                print(f"  - {item.name}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}g")
+                print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}{game.currency_symbol}")
 
         elif choice == "8":
             # View rates for players
@@ -602,7 +1254,7 @@ def manage_loot_table(game):
 
             print("\n" + "=" * 50)
             print(f"{current_table.name.upper()} - RATES")
-            print(f"Draw Cost: {current_table.draw_cost}g")
+            print(f"Draw Cost: {current_table.draw_cost}{game.currency_symbol}")
             print("=" * 50)
             total_weight = sum(item.weight for item in current_table.items)
 
@@ -610,10 +1262,10 @@ def manage_loot_table(game):
 
             for item in sorted_items:
                 percentage = (item.weight / total_weight) * 100
-                print(f"  {item.name}")
+                print(f"  {item.get_display_name()}")
                 print(f"    Type: {item.item_type}")
                 print(f"    Drop Rate: {percentage:.2f}%")
-                print(f"    Value: {item.gold_value}g")
+                print(f"    Value: {item.gold_value}{game.currency_symbol}")
                 print()
 
         elif choice == "9":
@@ -667,7 +1319,7 @@ def manage_players(game):
             player = game.get_player(name)
             if player:
                 print(f"\n--- {player.name} ---")
-                print(f"Gold: {player.gold}g")
+                print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
                 print(f"Inventory ({len(player.inventory)} items):")
                 for i, item in enumerate(player.inventory):
                     print(f"  {i}. {item}")
@@ -681,7 +1333,7 @@ def manage_players(game):
 
             print("\nAll Players:")
             for name, player in game.players.items():
-                print(f"  - {name}: {player.gold}g, {len(player.inventory)} items")
+                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items")
 
         elif choice == "5":
             break
@@ -715,7 +1367,7 @@ def draw_items_menu(game):
 
         print("\nAvailable players:")
         for name, player in game.players.items():
-            print(f"  - {name} ({player.gold}g)")
+            print(f"  - {name} ({player.gold}{game.currency_symbol})")
 
         player_name = input("\nEnter player name: ").strip()
         player = game.get_player(player_name)
@@ -724,32 +1376,57 @@ def draw_items_menu(game):
             print(f"Player '{player_name}' not found!")
             return
 
-        count = int(input(f"How many items to draw? (Cost: {selected_table.draw_cost}g per draw): ").strip())
+        # Calculate actual draw cost with reductions
+        base_cost = selected_table.draw_cost
+        actual_cost = player.calculate_draw_cost(base_cost)
+
+        flat, percent = player.get_total_draw_cost_reduction()
+        reduction_info = ""
+        if flat > 0 or percent > 0:
+            reduction_info = f" (Base: {base_cost}{game.currency_symbol}, -{flat} flat, -{percent}%)"
+
+        count = int(input(f"How many items to draw? (Cost: {actual_cost}{game.currency_symbol} per draw{reduction_info}): ").strip())
         if count <= 0:
             print("Count must be greater than 0!")
             return
 
-        total_cost = count * selected_table.draw_cost
+        total_cost = count * actual_cost
 
         if player.gold < total_cost:
-            print(f"❌ Not enough gold! Need {total_cost}g but {player.name} only has {player.gold}g")
+            print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol} but {player.name} only has {player.gold}{game.currency_symbol}")
             return
 
         player.remove_gold(total_cost)
 
         items = selected_table.draw_multiple(count)
-        print(f"\n💰 Paid {total_cost}g ({count} x {selected_table.draw_cost}g) to {selected_table.name}")
+        print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
         print(f"🎲 {player.name} drew {count} items:")
+
+        # Get double quantity chance
+        double_chance = player.get_double_quantity_chance()
+
         total_value = 0
+        doubled_count = 0
+
         for i, item in enumerate(items, 1):
-            print(f"  {i}. {item}")
+            # Check if we should double the quantity
+            if double_chance > 0 and random.random() * 100 < double_chance:
+                item.quantity *= 2
+                doubled_count += 1
+                print(f"  {i}. {item} ✨ DOUBLED!")
+            else:
+                print(f"  {i}. {item}")
+
             player.add_item(item)
             total_value += item.gold_value
 
+        if doubled_count > 0:
+            print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+
         net_value = total_value - total_cost
-        print(f"\nTotal value: {total_value}g")
-        print(f"Net gain/loss: {net_value:+d}g")
-        print(f"{player.name}'s gold: {player.gold}g | Inventory: {len(player.inventory)} items")
+        print(f"\nTotal value: {total_value}{game.currency_symbol}")
+        print(f"Net gain/loss: {net_value:+d}{game.currency_symbol}")
+        print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol} | Inventory: {len(player.inventory)} items")
     except ValueError:
         print("Invalid input!")
 
@@ -761,7 +1438,7 @@ def sell_items_menu(game):
 
     print("\nAvailable players:")
     for name, player in game.players.items():
-        print(f"  - {name} ({player.gold}g, {len(player.inventory)} items)")
+        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
 
     player_name = input("\nEnter player name: ").strip()
     player = game.get_player(player_name)
@@ -776,7 +1453,7 @@ def sell_items_menu(game):
 
     while True:
         print(f"\n--- {player.name}'s Inventory ---")
-        print(f"Gold: {player.gold}g")
+        print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
         print("\nItems:")
         for i, item in enumerate(player.inventory):
             print(f"  {i}. {item}")
@@ -796,8 +1473,8 @@ def sell_items_menu(game):
             item = player.inventory[index]
             player.remove_item(index)
             player.add_gold(item.gold_value)
-            print(f"✓ Sold {item.name} for {item.gold_value}g!")
-            print(f"New gold balance: {player.gold}g")
+            print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
+            print(f"New {game.currency_name} balance: {player.gold}{game.currency_symbol}")
 
             if not player.inventory:
                 print(f"\n{player.name} has sold all items!")
@@ -821,9 +1498,9 @@ def manage_crafting(game):
             output_type = input("Enter output item type: ").strip() or "misc"
 
             try:
-                output_gold = int(input("Enter output gold value: ").strip())
+                output_gold = int(input(f"Enter output {game.currency_name} value: ").strip())
                 if output_gold < 0:
-                    print("Invalid gold value!")
+                    print(f"Invalid {game.currency_name} value!")
                     continue
 
                 recipe = CraftingRecipe(output_name, output_type, output_gold)
@@ -945,10 +1622,66 @@ def manage_crafting(game):
 
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
+
+                    # If Equipment or Upgrade, allow player to roll for effects
+                    if recipe.output_type.lower() in ["equipment", "upgrade"]:
+                        if not game.effect_templates:
+                            print(f"\n⚠️  No effect templates available! Item crafted without effects.")
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                print(f"✓ Crafted [{rarity}] {recipe.output_name} (0 effects)")
+                            else:
+                                print(f"✓ Crafted {recipe.output_name} (0 effects)")
+                        else:
+                            # For Equipment, roll rarity first
+                            max_effects = None
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                max_effects = game.rarity_system.get_max_effects(rarity)
+                                print(f"\n✨ Rolled [{rarity}] {recipe.output_name}! (Max {max_effects} effects)")
+                            else:
+                                print(f"\n✓ Crafted {recipe.output_name}!")
+
+                            # Roll for effects
+                            print(f"\nRoll for effects? Cost: {game.effect_cost}{game.currency_symbol} per roll")
+                            print(f"Your {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+                            effects_added = 0
+                            while True:
+                                # Check if Equipment has reached max effects
+                                if max_effects and effects_added >= max_effects:
+                                    print(f"\n✓ Reached maximum effects for {rarity} rarity ({max_effects})!")
+                                    break
+
+                                roll_choice = input(f"\nRoll for effect #{effects_added + 1}? (y/n): ").strip().lower()
+                                if roll_choice != 'y':
+                                    break
+
+                                # Check if player has enough currency
+                                if player.gold < game.effect_cost:
+                                    print(f"❌ Not enough {game.currency_name}! Need {game.effect_cost}{game.currency_symbol}, have {player.gold}{game.currency_symbol}")
+                                    break
+
+                                # Deduct cost and roll for effect
+                                player.remove_gold(game.effect_cost)
+                                weights = [tmpl.weight for tmpl in game.effect_templates]
+                                rolled_template = random.choices(game.effect_templates, weights=weights, k=1)[0]
+                                effect = rolled_template.create_effect()
+                                crafted_item.add_effect(effect)
+                                effects_added += 1
+
+                                print(f"🎲 Rolled: {rolled_template.name}")
+                                print(f"   Effect: {effect}")
+                                print(f"   {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+                            print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
+                    else:
+                        print(f"✓ Crafted {recipe.output_name}!")
+
                     player.add_item(crafted_item)
                     crafted_count += 1
-
-                    print(f"✓ Crafted {recipe.output_name}! (Total: {crafted_count})")
 
                     # Ask if want to continue
                     continue_craft = input("Craft another? (press Enter to continue, 'done' to stop): ").strip().lower()
@@ -981,9 +1714,9 @@ def manage_enchantments(game):
             enchant_type = input("Enter enchantment type (e.g., weapon, armor): ").strip() or "misc"
 
             try:
-                gold_value = int(input("Enter gold value bonus: ").strip())
+                gold_value = int(input(f"Enter {game.currency_name} value bonus: ").strip())
                 if gold_value < 0:
-                    print("Invalid gold value!")
+                    print(f"Invalid {game.currency_name} value!")
                     continue
 
                 weight = float(input("Enter weight (default 1000): ").strip() or "1000")
@@ -1018,7 +1751,7 @@ def manage_enchantments(game):
 
                 new_name = input(f"New name [{ench.name}]: ").strip()
                 new_type = input(f"New type [{ench.enchant_type}]: ").strip()
-                gold_input = input(f"New gold value [{ench.gold_value}]: ").strip()
+                gold_input = input(f"New {game.currency_name} value [{ench.gold_value}]: ").strip()
                 weight_input = input(f"New weight [{ench.weight}]: ").strip()
 
                 if new_name:
@@ -1169,7 +1902,7 @@ def manage_enchantments(game):
 
 def admin_menu(game):
     while True:
-        show_admin_menu()
+        show_admin_menu(game.currency_name)
         choice = input("Enter choice: ").strip()
 
         if choice == "1":
@@ -1184,13 +1917,13 @@ def admin_menu(game):
                 continue
 
             try:
-                amount = int(input("Amount of gold to give: ").strip())
+                amount = int(input(f"Amount of {game.currency_name} to give: ").strip())
                 if amount <= 0:
                     print("Amount must be greater than 0!")
                     continue
 
                 player.add_gold(amount)
-                print(f"✓ Gave {amount}g to {player.name} (now has {player.gold}g)")
+                print(f"✓ Gave {amount}{game.currency_symbol} to {player.name} (now has {player.gold}{game.currency_symbol})")
             except ValueError:
                 print("Invalid amount!")
 
@@ -1206,15 +1939,15 @@ def admin_menu(game):
                 continue
 
             try:
-                amount = int(input(f"Amount of gold to take (has {player.gold}g): ").strip())
+                amount = int(input(f"Amount of {game.currency_name} to take (has {player.gold}{game.currency_symbol}): ").strip())
                 if amount <= 0:
                     print("Amount must be greater than 0!")
                     continue
 
                 if player.remove_gold(amount):
-                    print(f"✓ Took {amount}g from {player.name} (now has {player.gold}g)")
+                    print(f"✓ Took {amount}{game.currency_symbol} from {player.name} (now has {player.gold}{game.currency_symbol})")
                 else:
-                    print(f"Player doesn't have enough gold!")
+                    print(f"Player doesn't have enough {game.currency_name}!")
             except ValueError:
                 print("Invalid amount!")
 
@@ -1286,6 +2019,52 @@ def admin_menu(game):
                 print("Invalid input!")
 
         elif choice == "5":
+            # Change currency settings
+            print(f"\nCurrent currency: {game.currency_name} (symbol: {game.currency_symbol})")
+
+            new_name = input(f"Enter new currency name (leave blank to keep '{game.currency_name}'): ").strip()
+            new_symbol = input(f"Enter new currency symbol (leave blank to keep '{game.currency_symbol}'): ").strip()
+
+            if new_name:
+                game.currency_name = new_name
+            if new_symbol:
+                game.currency_symbol = new_symbol
+
+            print(f"✓ Currency updated: {game.currency_name} (symbol: {game.currency_symbol})")
+
+        elif choice == "6":
+            # Configure rarity weights
+            print("\n--- RARITY WEIGHT CONFIGURATION ---")
+            print("Current rarity weights:")
+            total_weight = sum(data['weight'] for data in game.rarity_system.rarities.values())
+            for rarity, data in game.rarity_system.rarities.items():
+                weight = data['weight']
+                max_effects = data['max_effects']
+                percentage = (weight / total_weight) * 100
+                print(f"  {rarity}: weight {weight} ({percentage:.2f}%) - {max_effects} effect slots")
+
+            print("\nEnter new weights (leave blank to keep current):")
+            for rarity in game.rarity_system.rarities.keys():
+                current_weight = game.rarity_system.rarities[rarity]['weight']
+                new_weight_input = input(f"{rarity} [{current_weight}]: ").strip()
+                if new_weight_input:
+                    try:
+                        new_weight = float(new_weight_input)
+                        if new_weight > 0:
+                            game.rarity_system.set_weight(rarity, new_weight)
+                            print(f"✓ Updated {rarity} weight to {new_weight}")
+                        else:
+                            print(f"Weight must be greater than 0! Keeping {current_weight}")
+                    except ValueError:
+                        print(f"Invalid input! Keeping {current_weight}")
+
+            print("\n✓ Rarity weights updated!")
+
+        elif choice == "7":
+            # Manage effect pool
+            manage_effect_pool(game)
+
+        elif choice == "8":
             break
 
 
@@ -1321,7 +2100,7 @@ if __name__ == "__main__":
 
     while True:
         show_main_menu()
-        choice = input("Enter your choice (1-8): ").strip()
+        choice = input("Enter your choice (1-9): ").strip()
 
         if choice == "1":
             manage_loot_table(game)
@@ -1334,13 +2113,15 @@ if __name__ == "__main__":
         elif choice == "5":
             manage_crafting(game)
         elif choice == "6":
-            admin_menu(game)
+            manage_equipment_upgrades(game)
         elif choice == "7":
+            admin_menu(game)
+        elif choice == "8":
             if game.save_game():
                 print("✓ Game saved successfully!")
             else:
                 print("Failed to save game.")
-        elif choice == "8":
+        elif choice == "9":
             print("\nAre you sure you want to exit?")
             save_prompt = input("Save before exiting? (y/n/cancel): ").strip().lower()
 
@@ -1356,4 +2137,4 @@ if __name__ == "__main__":
             break
         else:
 
-            print("Invalid choice! Please enter 1-8.")
+            print("Invalid choice! Please enter 1-9.")
