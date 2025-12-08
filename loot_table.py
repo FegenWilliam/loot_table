@@ -8,10 +8,11 @@ import copy
 
 class MasterItem:
     """Defines a master item template with name, type, and base gold value."""
-    def __init__(self, name, item_type, gold_value_per_unit):
+    def __init__(self, name, item_type, gold_value_per_unit, purchase_price=None):
         self.name = name
         self.item_type = item_type
         self.gold_value_per_unit = gold_value_per_unit
+        self.purchase_price = purchase_price  # Price to buy from shop (None = not for sale)
 
     def create_loot_item(self, quantity=1, weight=1000):
         """Create a LootItem instance from this master item."""
@@ -19,6 +20,8 @@ class MasterItem:
         return LootItem(self.name, weight, total_value, self.item_type, quantity)
 
     def __str__(self):
+        if self.purchase_price is not None:
+            return f"{self.name} ({self.item_type}) - {self.gold_value_per_unit}g sell / {self.purchase_price}g buy"
         return f"{self.name} ({self.item_type}) - {self.gold_value_per_unit}g each"
 
     def __repr__(self):
@@ -197,10 +200,11 @@ class RaritySystem:
 
 
 class CraftingRecipe:
-    def __init__(self, output_name, output_type, output_gold_value):
+    def __init__(self, output_name, output_type, output_gold_value, purchase_price=None):
         self.output_name = output_name
         self.output_type = output_type
         self.output_gold_value = output_gold_value
+        self.purchase_price = purchase_price  # Price to buy from shop (None = not for sale)
         self.ingredients = []
         self.effects = []  # Effects for Equipment/Upgrade items
 
@@ -223,7 +227,8 @@ class CraftingRecipe:
             ingredient_list = ", ".join(ingredient_parts)
 
         effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
-        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g){effects_str} = [{ingredient_list}]"
+        price_str = f" / {self.purchase_price}g buy" if self.purchase_price is not None else ""
+        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g{price_str}){effects_str} = [{ingredient_list}]"
 
     def __repr__(self):
         return self.__str__()
@@ -542,13 +547,13 @@ class GameSystem:
             return True
         return False
 
-    def add_master_item(self, name, item_type, gold_value_per_unit):
+    def add_master_item(self, name, item_type, gold_value_per_unit, purchase_price=None):
         """Add a new master item to the registry."""
         # Check if item already exists
         for item in self.master_items:
             if item.name.lower() == name.lower():
                 return None  # Item already exists
-        master_item = MasterItem(name, item_type, gold_value_per_unit)
+        master_item = MasterItem(name, item_type, gold_value_per_unit, purchase_price)
         self.master_items.append(master_item)
         return master_item
 
@@ -573,7 +578,8 @@ class GameSystem:
                     {
                         'name': item.name,
                         'item_type': item.item_type,
-                        'gold_value_per_unit': item.gold_value_per_unit
+                        'gold_value_per_unit': item.gold_value_per_unit,
+                        'purchase_price': item.purchase_price
                     }
                     for item in self.master_items
                 ],
@@ -677,6 +683,7 @@ class GameSystem:
                         'output_name': recipe.output_name,
                         'output_type': recipe.output_type,
                         'output_gold_value': recipe.output_gold_value,
+                        'purchase_price': recipe.purchase_price,
                         'ingredients': recipe.ingredients,
                         'effects': [
                             {
@@ -746,7 +753,8 @@ class GameSystem:
                     master_item = MasterItem(
                         item_data['name'],
                         item_data['item_type'],
-                        item_data['gold_value_per_unit']
+                        item_data['gold_value_per_unit'],
+                        item_data.get('purchase_price')  # Backward compatible
                     )
                     self.master_items.append(master_item)
 
@@ -891,7 +899,8 @@ class GameSystem:
                 recipe = CraftingRecipe(
                     recipe_data['output_name'],
                     recipe_data['output_type'],
-                    recipe_data['output_gold_value']
+                    recipe_data['output_gold_value'],
+                    recipe_data.get('purchase_price')  # Backward compatible
                 )
                 recipe.ingredients = recipe_data['ingredients']
                 # Load effects
@@ -1734,12 +1743,13 @@ def show_main_menu():
     print("2. Manage Loot Table")
     print("3. Manage Players")
     print("4. Draw Items")
-    print("5. Sell Items")
-    print("6. Crafting Menu")
-    print("7. Equipment & Upgrades")
-    print("8. Admin Menu")
-    print("9. Save Game")
-    print("10. Exit")
+    print("5. Shop")
+    print("6. Sell Items")
+    print("7. Crafting Menu")
+    print("8. Equipment & Upgrades")
+    print("9. Admin Menu")
+    print("10. Save Game")
+    print("11. Exit")
     print("=" * 40)
 
 
@@ -1770,14 +1780,22 @@ def manage_master_items(game):
                 item_type = "misc"
 
             try:
-                gold_per_unit = int(input(f"Enter {game.currency_name} value per unit: ").strip())
+                gold_per_unit = int(input(f"Enter {game.currency_name} value per unit (sell price): ").strip())
                 if gold_per_unit < 0:
                     print(f"{game.currency_name.capitalize()} value cannot be negative!")
                     continue
 
-                result = game.add_master_item(name, item_type, gold_per_unit)
+                purchase_input = input(f"Enter shop purchase price (leave blank for not for sale): ").strip()
+                purchase_price = None
+                if purchase_input:
+                    purchase_price = int(purchase_input)
+                    if purchase_price < 0:
+                        print("Purchase price cannot be negative!")
+                        continue
+
+                result = game.add_master_item(name, item_type, gold_per_unit, purchase_price)
                 if result:
-                    print(f"✓ Added master item: {result.name} ({result.item_type}) - {result.gold_value_per_unit}{game.currency_symbol} each")
+                    print(f"✓ Added master item: {result}")
                 else:
                     print(f"Item '{name}' already exists in the registry!")
             except ValueError:
@@ -1807,14 +1825,22 @@ def manage_master_items(game):
                 new_type = input(f"New type [{item.item_type}]: ").strip()
                 new_gold = input(f"New {game.currency_name} per unit [{item.gold_value_per_unit}{game.currency_symbol}]: ").strip()
 
+                purchase_display = f"{item.purchase_price}{game.currency_symbol}" if item.purchase_price is not None else "not for sale"
+                new_purchase = input(f"New shop purchase price [{purchase_display}]: ").strip()
+
                 if new_name:
                     item.name = new_name
                 if new_type:
                     item.item_type = new_type
                 if new_gold:
                     item.gold_value_per_unit = int(new_gold)
+                if new_purchase:
+                    if new_purchase.lower() == 'none':
+                        item.purchase_price = None
+                    else:
+                        item.purchase_price = int(new_purchase)
 
-                print(f"✓ Updated: {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
+                print(f"✓ Updated: {item}")
             except ValueError:
                 print("Invalid input!")
 
@@ -2766,6 +2792,109 @@ def sell_items_menu(game):
             print("Invalid input! Enter a number or 'back'")
 
 
+def shop_menu(game):
+    """Shop where players can buy items from master items and crafting recipes."""
+    if not game.players:
+        print("No players exist! Add players first.")
+        return
+
+    print("\nAvailable players:")
+    for name, player in game.players.items():
+        current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+        print(f"  - {name} ({player.gold}{game.currency_symbol}){current_marker}")
+
+    player_name = get_player_name_input(game)
+    player = game.get_player(player_name)
+
+    if not player:
+        print(f"Player '{player_name}' not found!")
+        return
+
+    while True:
+        print(f"\n{'=' * 60}")
+        print("SHOP")
+        print(f"{'=' * 60}")
+        print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        print()
+
+        # Collect all purchasable items
+        purchasable_items = []
+
+        # Add master items with purchase prices
+        for master_item in game.master_items:
+            if master_item.purchase_price is not None:
+                purchasable_items.append(('master', master_item))
+
+        # Add craftable items with purchase prices
+        for recipe in game.crafting_recipes:
+            if recipe.purchase_price is not None:
+                purchasable_items.append(('recipe', recipe))
+
+        if not purchasable_items:
+            print("No items available for purchase!")
+            print("(Set purchase prices on master items or recipes to make them available)")
+            return
+
+        # Display items
+        print("Available items:")
+        for i, (item_type, item) in enumerate(purchasable_items):
+            if item_type == 'master':
+                print(f"  {i}. {item.name} ({item.item_type}) - {item.purchase_price}{game.currency_symbol} (sells for {item.gold_value_per_unit}{game.currency_symbol})")
+            else:  # recipe
+                print(f"  {i}. {item.output_name} ({item.output_type}) - {item.purchase_price}{game.currency_symbol} (sells for {item.output_gold_value}{game.currency_symbol})")
+
+        choice = input("\nEnter item number to buy (or 'back' to return): ").strip().lower()
+
+        if choice == 'back':
+            break
+
+        try:
+            index = int(choice)
+            if index < 0 or index >= len(purchasable_items):
+                print("Invalid item number!")
+                continue
+
+            item_type, item = purchasable_items[index]
+
+            # Get quantity
+            quantity = int(input("How many to buy? ").strip())
+            if quantity <= 0:
+                print("Quantity must be at least 1!")
+                continue
+
+            # Calculate total cost
+            if item_type == 'master':
+                total_cost = item.purchase_price * quantity
+                item_name = item.name
+                gold_value_per = item.gold_value_per_unit
+                item_type_str = item.item_type
+            else:  # recipe
+                total_cost = item.purchase_price * quantity
+                item_name = item.output_name
+                gold_value_per = item.output_gold_value
+                item_type_str = item.output_type
+
+            # Check if player has enough money
+            if player.gold < total_cost:
+                print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol}, have {player.gold}{game.currency_symbol}")
+                continue
+
+            # Deduct money
+            player.remove_gold(total_cost)
+
+            # Add items to inventory
+            for _ in range(quantity):
+                # Create a loot item
+                loot_item = LootItem(item_name, 1000, gold_value_per, item_type_str, 1)
+                player.add_item(loot_item)
+
+            print(f"\n✓ Purchased {quantity}x {item_name} for {total_cost}{game.currency_symbol}!")
+            print(f"New {game.currency_name} balance: {player.gold}{game.currency_symbol}")
+
+        except ValueError:
+            print("Invalid input!")
+
+
 def quick_turn_menu(game):
     """Execute a quick turn: draw, show results, craft, sell for all players."""
     if not game.loot_tables:
@@ -3125,12 +3254,20 @@ def manage_crafting(game):
             output_type = input("Enter output item type: ").strip() or "misc"
 
             try:
-                output_gold = int(input(f"Enter output {game.currency_name} value: ").strip())
+                output_gold = int(input(f"Enter output {game.currency_name} value (sell price): ").strip())
                 if output_gold < 0:
                     print(f"Invalid {game.currency_name} value!")
                     continue
 
-                recipe = CraftingRecipe(output_name, output_type, output_gold)
+                purchase_input = input(f"Enter shop purchase price (leave blank for not for sale): ").strip()
+                purchase_price = None
+                if purchase_input:
+                    purchase_price = int(purchase_input)
+                    if purchase_price < 0:
+                        print("Purchase price cannot be negative!")
+                        continue
+
+                recipe = CraftingRecipe(output_name, output_type, output_gold, purchase_price)
 
                 print("\nAdd ingredients (enter item names)")
                 print("\nAvailable from Master Items:")
@@ -3801,7 +3938,7 @@ if __name__ == "__main__":
     while True:
         show_context_header(game)
         show_main_menu()
-        choice = input("Enter your choice (0-10): ").strip()
+        choice = input("Enter your choice (0-11): ").strip()
 
         if choice == "0":
             quick_commands_menu(game)
@@ -3814,19 +3951,21 @@ if __name__ == "__main__":
         elif choice == "4":
             draw_items_menu(game)
         elif choice == "5":
-            sell_items_menu(game)
+            shop_menu(game)
         elif choice == "6":
-            manage_crafting(game)
+            sell_items_menu(game)
         elif choice == "7":
-            manage_equipment_upgrades(game)
+            manage_crafting(game)
         elif choice == "8":
-            admin_menu(game)
+            manage_equipment_upgrades(game)
         elif choice == "9":
+            admin_menu(game)
+        elif choice == "10":
             if game.save_game():
                 print("✓ Game saved successfully!")
             else:
                 print("Failed to save game.")
-        elif choice == "10":
+        elif choice == "11":
             print("\nAre you sure you want to exit?")
             save_prompt = input("Save before exiting? (y/n/cancel): ").strip().lower()
 
@@ -3842,4 +3981,4 @@ if __name__ == "__main__":
             break
         else:
 
-            print("Invalid choice! Please enter 0-10.")
+            print("Invalid choice! Please enter 0-11.")
