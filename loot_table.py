@@ -3,6 +3,26 @@ import json
 import os
 import signal
 import sys
+import copy
+
+
+class MasterItem:
+    """Defines a master item template with name, type, and base gold value."""
+    def __init__(self, name, item_type, gold_value_per_unit):
+        self.name = name
+        self.item_type = item_type
+        self.gold_value_per_unit = gold_value_per_unit
+
+    def create_loot_item(self, quantity=1, weight=1000):
+        """Create a LootItem instance from this master item."""
+        total_value = self.gold_value_per_unit * quantity
+        return LootItem(self.name, weight, total_value, self.item_type, quantity)
+
+    def __str__(self):
+        return f"{self.name} ({self.item_type}) - {self.gold_value_per_unit}g each"
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class LootItem:
@@ -152,7 +172,17 @@ class CraftingRecipe:
         self.effects.append(effect)
 
     def __str__(self):
-        ingredient_list = ", ".join(self.ingredients) if self.ingredients else "No ingredients"
+        if not self.ingredients:
+            ingredient_list = "No ingredients"
+        else:
+            # Count ingredients and display as "Nx Item"
+            ingredient_counts = {}
+            for ingredient in self.ingredients:
+                ingredient_counts[ingredient] = ingredient_counts.get(ingredient, 0) + 1
+            ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                               for name, count in ingredient_counts.items()]
+            ingredient_list = ", ".join(ingredient_parts)
+
         effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
         return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g){effects_str} = [{ingredient_list}]"
 
@@ -169,12 +199,74 @@ class Player:
         self.consumed_upgrades = []  # Upgrades that have been consumed
 
     def add_item(self, item):
+        """Add item to inventory with automatic stacking."""
+        # Items with enchantments, effects, or rarity don't stack (they're unique)
+        if item.enchantments or item.effects or item.rarity:
+            self.inventory.append(item)
+            return
+
+        # Try to find existing stack with same name and type
+        for existing_item in self.inventory:
+            if (existing_item.name == item.name and
+                existing_item.item_type == item.item_type and
+                not existing_item.enchantments and
+                not existing_item.effects and
+                not existing_item.rarity):
+                # Stack found - combine quantities and values
+                existing_item.quantity += item.quantity
+                existing_item.gold_value += item.gold_value
+                return
+
+        # No stack found - add as new item
         self.inventory.append(item)
 
     def remove_item(self, index):
         if 0 <= index < len(self.inventory):
             return self.inventory.pop(index)
         return None
+
+    def consume_item_by_name(self, item_name, count=1):
+        """
+        Consume a specific count of items by name from stacks.
+        Returns True if successful, False if not enough items.
+        """
+        # Find all matching items
+        total_available = 0
+        matching_items = []
+
+        for i, item in enumerate(self.inventory):
+            if item.name == item_name:
+                total_available += item.quantity
+                matching_items.append((i, item))
+
+        if total_available < count:
+            return False
+
+        # Consume from stacks
+        remaining_to_consume = count
+        items_to_remove = []
+
+        for idx, (inv_idx, item) in enumerate(matching_items):
+            if remaining_to_consume <= 0:
+                break
+
+            if item.quantity <= remaining_to_consume:
+                # Consume entire stack
+                remaining_to_consume -= item.quantity
+                items_to_remove.append(inv_idx)
+            else:
+                # Consume partial stack
+                # Calculate value per unit
+                value_per_unit = item.gold_value / item.quantity
+                item.quantity -= remaining_to_consume
+                item.gold_value -= value_per_unit * remaining_to_consume
+                remaining_to_consume = 0
+
+        # Remove consumed stacks (in reverse order to maintain indices)
+        for inv_idx in sorted(items_to_remove, reverse=True):
+            self.inventory.pop(inv_idx)
+
+        return True
 
     def equip_item(self, item):
         """Equip an equipment item."""
@@ -245,6 +337,71 @@ class Player:
 
         return min(100, total_chance)  # Cap at 100%
 
+    def get_sell_price_increase(self):
+        """Calculate total sell price increase for non-crafted items from equipment and upgrades."""
+        flat_increase = 0
+        percentage_increase = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        return flat_increase, percentage_increase
+
+    def get_crafted_sell_price_increase(self):
+        """Calculate total sell price increase for crafted items from equipment and upgrades."""
+        flat_increase = 0
+        percentage_increase = 0
+
+        # Add effects from equipped items
+        for item in self.equipped_items:
+            for effect in item.effects:
+                if effect.effect_type == "crafted_sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        # Add effects from consumed upgrades
+        for item in self.consumed_upgrades:
+            for effect in item.effects:
+                if effect.effect_type == "crafted_sell_price_increase":
+                    if effect.is_percentage:
+                        percentage_increase += effect.value
+                    else:
+                        flat_increase += effect.value
+
+        return flat_increase, percentage_increase
+
+    def calculate_item_value(self, base_value, is_crafted=False):
+        """Calculate the actual item value after sell price increases."""
+        if is_crafted:
+            flat, percent = self.get_crafted_sell_price_increase()
+        else:
+            flat, percent = self.get_sell_price_increase()
+
+        # Apply percentage increase first
+        value = base_value * (1 + percent / 100)
+
+        # Then apply flat increase
+        value = value + flat
+
+        return int(value)
+
     def add_gold(self, amount):
         self.gold += amount
 
@@ -289,19 +446,23 @@ class LootTable:
         if not self.items:
             return None
         weights = [item.weight for item in self.items]
-        return random.choices(self.items, weights=weights, k=1)[0]
+        drawn_item = random.choices(self.items, weights=weights, k=1)[0]
+        return copy.deepcopy(drawn_item)
 
     def draw_multiple(self, count):
         if not self.items:
             return []
         weights = [item.weight for item in self.items]
-        return random.choices(self.items, weights=weights, k=count)
+        drawn_items = random.choices(self.items, weights=weights, k=count)
+        return [copy.deepcopy(item) for item in drawn_items]
 
 
 class GameSystem:
     def __init__(self):
+        self.master_items = []  # Master item registry
         self.loot_tables = []  # List of LootTable objects
         self.current_table_index = 0  # Currently selected table
+        self.current_player_name = None  # Currently selected player
         self.players = {}
         self.crafting_recipes = []
         self.enchantments = []
@@ -336,13 +497,47 @@ class GameSystem:
     def remove_player(self, name):
         if name in self.players:
             del self.players[name]
+            # Clear current player if they were removed
+            if self.current_player_name == name:
+                self.current_player_name = None
             return True
         return False
+
+    def add_master_item(self, name, item_type, gold_value_per_unit):
+        """Add a new master item to the registry."""
+        # Check if item already exists
+        for item in self.master_items:
+            if item.name.lower() == name.lower():
+                return None  # Item already exists
+        master_item = MasterItem(name, item_type, gold_value_per_unit)
+        self.master_items.append(master_item)
+        return master_item
+
+    def get_master_item(self, name):
+        """Get a master item by name."""
+        for item in self.master_items:
+            if item.name.lower() == name.lower():
+                return item
+        return None
+
+    def remove_master_item(self, index):
+        """Remove a master item by index."""
+        if 0 <= index < len(self.master_items):
+            return self.master_items.pop(index)
+        return None
 
     def save_game(self):
         """Save the game state to a JSON file."""
         try:
             data = {
+                'master_items': [
+                    {
+                        'name': item.name,
+                        'item_type': item.item_type,
+                        'gold_value_per_unit': item.gold_value_per_unit
+                    }
+                    for item in self.master_items
+                ],
                 'loot_tables': [
                     {
                         'name': table.name,
@@ -362,6 +557,7 @@ class GameSystem:
                     for table in self.loot_tables
                 ],
                 'current_table_index': self.current_table_index,
+                'current_player_name': self.current_player_name,
                 'players': {
                     name: {
                         'gold': player.gold,
@@ -499,6 +695,17 @@ class GameSystem:
             with open(self.save_file, 'r') as f:
                 data = json.load(f)
 
+            # Load master items
+            self.master_items = []
+            if 'master_items' in data:
+                for item_data in data['master_items']:
+                    master_item = MasterItem(
+                        item_data['name'],
+                        item_data['item_type'],
+                        item_data['gold_value_per_unit']
+                    )
+                    self.master_items.append(master_item)
+
             # Load loot tables (with backward compatibility)
             self.loot_tables = []
             if 'loot_tables' in data:
@@ -517,6 +724,7 @@ class GameSystem:
                         table.items.append(item)
                     self.loot_tables.append(table)
                 self.current_table_index = data.get('current_table_index', 0)
+                self.current_player_name = data.get('current_player_name')
             elif 'loot_table' in data:
                 # Old format: single table - convert it
                 table = LootTable("Default", 100)
@@ -681,10 +889,765 @@ class GameSystem:
             return False
 
 
+def get_player_name_input(game, prompt="Enter player name"):
+    """Get player name from user, defaulting to current player if set."""
+    if game.current_player_name and game.current_player_name in game.players:
+        default_prompt = f"{prompt} (default: {game.current_player_name}): "
+        player_name = input(default_prompt).strip()
+        # If empty, use current player
+        if not player_name:
+            return game.current_player_name
+        return player_name
+    else:
+        return input(f"{prompt}: ").strip()
+
+
+def quick_commands_menu(game):
+    """Quick command interface for common actions."""
+    print("\n" + "=" * 60)
+    print("QUICK COMMANDS")
+    print("=" * 60)
+    print("Type 'help' for available commands, 'back' to return to main menu")
+    print()
+
+    while True:
+        cmd_input = input(">>> ").strip()
+
+        if not cmd_input:
+            continue
+
+        if cmd_input.lower() == 'back':
+            break
+
+        if cmd_input.lower() == 'help':
+            show_quick_commands_help(game)
+            continue
+
+        # Parse and execute command
+        execute_quick_command(game, cmd_input)
+
+
+def show_quick_commands_help(game):
+    """Show help for quick commands."""
+    print("\n" + "=" * 60)
+    print("AVAILABLE QUICK COMMANDS")
+    print("=" * 60)
+    print("\n📦 DRAWING:")
+    print("  draw <count> [player] [table]")
+    print("    Examples:")
+    print("      draw 10              - Draw 10 items for current player from current table")
+    print("      draw 5 bob           - Draw 5 items for bob from current table")
+    print("      draw 10 bob dungeon  - Draw 10 items for bob from 'dungeon' table")
+    print()
+    print("💰 SELLING:")
+    print("  sell <index> [player]")
+    print("  sell all [player]")
+    print("  sell all <itemname> [player]")
+    print("  sell <itemname> <count> [player]")
+    print("    Examples:")
+    print("      sell 0            - Sell item at index 0 for current player")
+    print("      sell 0 bob        - Sell item 0 for bob")
+    print("      sell all          - Sell all items for current player")
+    print("      sell all sword    - Sell all swords for current player")
+    print("      sell sword 5      - Sell 5 swords for current player")
+    print("      sell sword 3 bob  - Sell 3 swords for bob")
+    print()
+    print("🔨 CRAFTING:")
+    print("  craft <recipe_name> [count] [player]")
+    print("    Examples:")
+    print("      craft sword           - Craft 1 sword for current player")
+    print("      craft sword 5         - Craft 5 swords for current player")
+    print("      craft sword 5 bob     - Craft 5 swords for bob")
+    print()
+    print("📋 VIEWING:")
+    print("  inv [player]      - Show inventory")
+    print("  stats [player]    - Show equipment stats")
+    print("  gold [player]     - Show gold amount")
+    print()
+    print("⚔️  EQUIPMENT:")
+    print("  equip <index> [player]   - Equip item at index")
+    print("  consume <index> [player] - Consume upgrade at index")
+    print()
+    print("👑 ADMIN:")
+    print("  give <amount> [player]  - Give gold to player")
+    print("  take <amount> [player]  - Take gold from player")
+    print()
+    print("Other: back, help")
+    print("=" * 60)
+
+
+def execute_quick_command(game, cmd_input):
+    """Parse and execute a quick command."""
+    parts = cmd_input.split()
+    if not parts:
+        return
+
+    command = parts[0].lower()
+    args = parts[1:]
+
+    try:
+        if command == "draw":
+            quick_draw(game, args)
+        elif command == "sell":
+            quick_sell(game, args)
+        elif command == "craft":
+            quick_craft(game, args)
+        elif command == "inv" or command == "inventory":
+            quick_inventory(game, args)
+        elif command == "stats":
+            quick_stats(game, args)
+        elif command == "gold":
+            quick_gold(game, args)
+        elif command == "equip":
+            quick_equip(game, args)
+        elif command == "consume":
+            quick_consume(game, args)
+        elif command == "give":
+            quick_give_gold(game, args)
+        elif command == "take":
+            quick_take_gold(game, args)
+        else:
+            print(f"Unknown command: '{command}'. Type 'help' for available commands.")
+    except Exception as e:
+        print(f"Error executing command: {e}")
+
+
+def quick_draw(game, args):
+    """Quick draw command: draw <count> [player] [table]"""
+    if not args:
+        print("Usage: draw <count> [player] [table]")
+        return
+
+    try:
+        count = int(args[0])
+    except ValueError:
+        print("Error: count must be a number")
+        return
+
+    # Determine player
+    player_name = None
+    table_name = None
+
+    if len(args) >= 2:
+        player_name = args[1]
+    else:
+        player_name = game.current_player_name
+
+    if len(args) >= 3:
+        table_name = args[2]
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    # Determine table
+    if table_name:
+        # Find table by name
+        selected_table = None
+        for table in game.loot_tables:
+            if table.name.lower() == table_name.lower():
+                selected_table = table
+                break
+        if not selected_table:
+            print(f"Error: Table '{table_name}' not found")
+            return
+    else:
+        selected_table = game.get_current_table()
+        if not selected_table:
+            print("Error: No current table set")
+            return
+
+    if not selected_table.items:
+        print(f"Error: Table '{selected_table.name}' has no items")
+        return
+
+    # Calculate cost
+    base_cost = selected_table.draw_cost
+    actual_cost = player.calculate_draw_cost(base_cost)
+    total_cost = count * actual_cost
+
+    if player.gold < total_cost:
+        print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol} but {player.name} only has {player.gold}{game.currency_symbol}")
+        return
+
+    # Draw items
+    player.remove_gold(total_cost)
+    items = selected_table.draw_multiple(count)
+
+    print(f"💰 Paid {total_cost}{game.currency_symbol} ({count} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
+    print(f"🎲 {player.name} drew {count} items:")
+
+    # Get bonuses
+    double_chance = player.get_double_quantity_chance()
+    flat_price, percent_price = player.get_sell_price_increase()
+
+    total_value = 0
+    doubled_count = 0
+    price_boosted_count = 0
+
+    for i, item in enumerate(items, 1):
+        # Apply sell price increase
+        price_boosted = False
+        if flat_price > 0 or percent_price > 0:
+            original_value = item.gold_value
+            item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+            if item.gold_value > original_value:
+                price_boosted_count += 1
+                price_boosted = True
+
+        # Apply double quantity chance
+        doubled = False
+        if double_chance > 0 and random.random() * 100 < double_chance:
+            item.quantity *= 2
+            item.gold_value *= 2
+            doubled_count += 1
+            doubled = True
+
+        # Display
+        indicators = []
+        if doubled:
+            indicators.append("✨ DOUBLED!")
+        if price_boosted:
+            indicators.append("💰 PRICE BOOST!")
+
+        if indicators:
+            print(f"  {i}. {item} {' '.join(indicators)}")
+        else:
+            print(f"  {i}. {item}")
+
+        player.add_item(item)
+        total_value += item.gold_value
+
+    if doubled_count > 0:
+        print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+
+    if price_boosted_count > 0:
+        print(f"💰 {price_boosted_count} item(s) had their value increased! (+{flat_price} flat, +{percent_price}%)")
+
+    net_value = total_value - total_cost
+    print(f"\nTotal value: {total_value}{game.currency_symbol}")
+    print(f"Net gain/loss: {net_value:+d}{game.currency_symbol}")
+    print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol} | Inventory: {len(player.inventory)} items")
+
+
+def quick_sell(game, args):
+    """Quick sell command: sell <index|all|itemname> [count] [player]"""
+    if not args:
+        print("Usage: sell <index|all|all itemname|itemname count> [player]")
+        return
+
+    # Parse command variants
+    # Variant 1: sell all [itemname] [player]
+    if args[0].lower() == "all":
+        player_name = None
+        item_name = None
+
+        if len(args) == 1:
+            # sell all - sell all items for current player
+            player_name = game.current_player_name
+        elif len(args) == 2:
+            # sell all X - could be "sell all bob" (player) or "sell all sword" (item name)
+            # Check if args[1] is a player
+            if game.get_player(args[1]):
+                player_name = args[1]
+            else:
+                # It's an item name
+                player_name = game.current_player_name
+                item_name = args[1]
+        elif len(args) >= 3:
+            # sell all sword bob
+            item_name = args[1]
+            player_name = args[2]
+
+        if not player_name:
+            print("Error: No player specified and no current player set")
+            return
+
+        player = game.get_player(player_name)
+        if not player:
+            print(f"Error: Player '{player_name}' not found")
+            return
+
+        if not player.inventory:
+            print(f"{player.name} has no items to sell!")
+            return
+
+        # Sell all or sell all matching item name
+        if item_name:
+            # Sell all items matching the name
+            items_to_sell = [item for item in player.inventory if item.name.lower() == item_name.lower()]
+            if not items_to_sell:
+                print(f"Error: No items named '{item_name}' found in inventory")
+                return
+
+            total_gold = sum(item.gold_value for item in items_to_sell)
+            count = len(items_to_sell)
+
+            # Remove items from inventory
+            player.inventory = [item for item in player.inventory if item.name.lower() != item_name.lower()]
+            player.add_gold(total_gold)
+
+            print(f"✓ Sold {count}x {item_name} for {total_gold}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        else:
+            # Sell all items
+            total_gold = sum(item.gold_value for item in player.inventory)
+            item_count = len(player.inventory)
+            player.inventory.clear()
+            player.add_gold(total_gold)
+            print(f"✓ Sold all {item_count} items for {total_gold}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        return
+
+    # Variant 2: sell <index> [player] - sell by index
+    try:
+        index = int(args[0])
+
+        # Determine player
+        player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+        if not player_name:
+            print("Error: No player specified and no current player set")
+            return
+
+        player = game.get_player(player_name)
+        if not player:
+            print(f"Error: Player '{player_name}' not found")
+            return
+
+        if not player.inventory:
+            print(f"{player.name} has no items to sell!")
+            return
+
+        if index < 0 or index >= len(player.inventory):
+            print(f"Error: Invalid item index. Player has {len(player.inventory)} items (0-{len(player.inventory)-1})")
+            return
+
+        item = player.remove_item(index)
+        if item:
+            player.add_gold(item.gold_value)
+            print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        return
+    except ValueError:
+        pass  # Not a number, continue to item name logic
+
+    # Variant 3: sell <itemname> <count> [player]
+    item_name = args[0]
+
+    if len(args) < 2:
+        print("Usage: sell <itemname> <count> [player]")
+        return
+
+    try:
+        count = int(args[1])
+    except ValueError:
+        print("Error: count must be a number")
+        return
+
+    player_name = args[2] if len(args) >= 3 else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    if not player.inventory:
+        print(f"{player.name} has no items to sell!")
+        return
+
+    # Find matching items and count total quantity across stacks
+    matching_items = []
+    total_quantity = 0
+
+    for i, item in enumerate(player.inventory):
+        if item.name.lower() == item_name.lower():
+            matching_items.append((i, item))
+            total_quantity += item.quantity
+
+    if not matching_items:
+        print(f"Error: No items named '{item_name}' found in inventory")
+        return
+
+    if total_quantity < count:
+        print(f"Error: Player only has {total_quantity}x {item_name}, cannot sell {count}")
+        return
+
+    # Sell the requested count from stacks
+    total_gold = 0
+    remaining_to_sell = count
+    items_to_remove = []
+
+    for idx, (inv_idx, item) in enumerate(matching_items):
+        if remaining_to_sell <= 0:
+            break
+
+        if item.quantity <= remaining_to_sell:
+            # Sell entire stack
+            total_gold += item.gold_value
+            remaining_to_sell -= item.quantity
+            items_to_remove.append(inv_idx)
+        else:
+            # Sell partial stack
+            value_per_unit = item.gold_value / item.quantity
+            gold_from_partial = value_per_unit * remaining_to_sell
+            total_gold += gold_from_partial
+            item.quantity -= remaining_to_sell
+            item.gold_value -= gold_from_partial
+            remaining_to_sell = 0
+
+    # Remove sold stacks (in reverse order to maintain indices)
+    for inv_idx in sorted(items_to_remove, reverse=True):
+        player.inventory.pop(inv_idx)
+
+    player.add_gold(int(total_gold))
+    print(f"✓ Sold {count}x {item_name} for {int(total_gold)}{game.currency_symbol}!")
+    print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+
+def quick_craft(game, args):
+    """Quick craft command: craft <recipe_name> [count] [player]"""
+    if not args:
+        print("Usage: craft <recipe_name> [count] [player]")
+        return
+
+    recipe_name = args[0]
+    count = 1
+    player_name = None
+
+    # Parse optional count and player
+    if len(args) >= 2:
+        try:
+            count = int(args[1])
+            if len(args) >= 3:
+                player_name = args[2]
+        except ValueError:
+            # args[1] is player name, not count
+            player_name = args[1]
+            count = 1
+
+    if not player_name:
+        player_name = game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    # Find recipe
+    recipe = None
+    for r in game.crafting_recipes:
+        if r.output_name.lower() == recipe_name.lower():
+            recipe = r
+            break
+
+    if not recipe:
+        print(f"Error: Recipe '{recipe_name}' not found")
+        return
+
+    # Craft items
+    crafted_count = 0
+    for _ in range(count):
+        # Count required quantities for each ingredient
+        required_ingredients = {}
+        for ingredient in recipe.ingredients:
+            required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
+
+        # Check if player has all ingredients in required quantities
+        missing_ingredients = []
+
+        for ingredient, required_count in required_ingredients.items():
+            # Count total quantity of this ingredient across all stacks
+            total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
+            if total_quantity < required_count:
+                missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
+
+        if missing_ingredients:
+            if crafted_count > 0:
+                print(f"\n❌ Out of ingredients after crafting {crafted_count}! Missing: {', '.join(missing_ingredients)}")
+            else:
+                print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
+            break
+
+        # Remove ingredients (consumes from stacks)
+        for ingredient in recipe.ingredients:
+            player.consume_item_by_name(ingredient, 1)
+
+        # Create crafted item
+        crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
+
+        # Apply crafted sell price increase
+        flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
+        if flat_craft_price > 0 or percent_craft_price > 0:
+            original_craft_value = crafted_item.gold_value
+            crafted_item.gold_value = player.calculate_item_value(original_craft_value, is_crafted=True)
+
+        player.add_item(crafted_item)
+        crafted_count += 1
+        print(f"✓ Crafted {recipe.output_name} ({crafted_item.gold_value}{game.currency_symbol})")
+
+    if crafted_count > 0:
+        print(f"\n🎉 Total crafted: {crafted_count}x {recipe.output_name}")
+
+
+def quick_inventory(game, args):
+    """Quick inventory command: inv [player]"""
+    player_name = args[0] if args else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    print(f"\n--- {player.name}'s Inventory ---")
+    print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
+    print(f"Items ({len(player.inventory)}):")
+    if player.inventory:
+        for i, item in enumerate(player.inventory):
+            print(f"  {i}. {item}")
+    else:
+        print("  (empty)")
+
+
+def quick_stats(game, args):
+    """Quick stats command: stats [player]"""
+    player_name = args[0] if args else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    print(f"\n--- {player.name}'s Equipment & Upgrades ---")
+
+    flat, percent = player.get_total_draw_cost_reduction()
+    print(f"Total Draw Cost Reduction: -{flat} flat, -{percent}%")
+
+    double_chance = player.get_double_quantity_chance()
+    print(f"Total Double Quantity Chance: {double_chance}%")
+
+    flat_sell, percent_sell = player.get_sell_price_increase()
+    print(f"Total Sell Price Increase (Non-Crafted): +{flat_sell} flat, +{percent_sell}%")
+
+    flat_craft_sell, percent_craft_sell = player.get_crafted_sell_price_increase()
+    print(f"Total Sell Price Increase (Crafted): +{flat_craft_sell} flat, +{percent_craft_sell}%")
+
+    print(f"\nEquipped Items ({len(player.equipped_items)}):")
+    if player.equipped_items:
+        for i, item in enumerate(player.equipped_items):
+            effects_str = ", ".join([str(e) for e in item.effects])
+            print(f"  {i}. {item.name} [{effects_str}]")
+    else:
+        print("  (none)")
+
+    print(f"\nConsumed Upgrades ({len(player.consumed_upgrades)}):")
+    if player.consumed_upgrades:
+        for item in player.consumed_upgrades:
+            effects_str = ", ".join([str(e) for e in item.effects])
+            print(f"  - {item.name} [{effects_str}]")
+    else:
+        print("  (none)")
+
+
+def quick_gold(game, args):
+    """Quick gold command: gold [player]"""
+    player_name = args[0] if args else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    print(f"{player.name}: {player.gold}{game.currency_symbol}")
+
+
+def quick_equip(game, args):
+    """Quick equip command: equip <index> [player]"""
+    if not args:
+        print("Usage: equip <index> [player]")
+        return
+
+    try:
+        index = int(args[0])
+    except ValueError:
+        print("Error: index must be a number")
+        return
+
+    player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    # Filter for Equipment items
+    equipment_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "equipment"]
+
+    if not equipment_items:
+        print(f"{player.name} has no equipment items to equip!")
+        return
+
+    if index < 0 or index >= len(equipment_items):
+        print(f"Error: Invalid equipment index. Player has {len(equipment_items)} equipment items (0-{len(equipment_items)-1})")
+        return
+
+    inv_idx, item = equipment_items[index]
+    player.remove_item(inv_idx)
+    player.equip_item(item)
+    print(f"✓ Equipped {item.name}!")
+
+
+def quick_consume(game, args):
+    """Quick consume command: consume <index> [player]"""
+    if not args:
+        print("Usage: consume <index> [player]")
+        return
+
+    try:
+        index = int(args[0])
+    except ValueError:
+        print("Error: index must be a number")
+        return
+
+    player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    # Filter for Upgrade items
+    upgrade_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type.lower() == "upgrade"]
+
+    if not upgrade_items:
+        print(f"{player.name} has no upgrade items to consume!")
+        return
+
+    if index < 0 or index >= len(upgrade_items):
+        print(f"Error: Invalid upgrade index. Player has {len(upgrade_items)} upgrade items (0-{len(upgrade_items)-1})")
+        return
+
+    inv_idx, item = upgrade_items[index]
+    player.remove_item(inv_idx)
+    player.consume_upgrade(item)
+    print(f"✓ Consumed {item.name}! Effects are now permanently applied.")
+
+
+def quick_give_gold(game, args):
+    """Quick give gold command: give <amount> [player]"""
+    if not args:
+        print("Usage: give <amount> [player]")
+        return
+
+    try:
+        amount = int(args[0])
+    except ValueError:
+        print("Error: amount must be a number")
+        return
+
+    player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    player.add_gold(amount)
+    print(f"✓ Gave {amount}{game.currency_symbol} to {player.name} (now has {player.gold}{game.currency_symbol})")
+
+
+def quick_take_gold(game, args):
+    """Quick take gold command: take <amount> [player]"""
+    if not args:
+        print("Usage: take <amount> [player]")
+        return
+
+    try:
+        amount = int(args[0])
+    except ValueError:
+        print("Error: amount must be a number")
+        return
+
+    player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+    if not player_name:
+        print("Error: No player specified and no current player set")
+        return
+
+    player = game.get_player(player_name)
+    if not player:
+        print(f"Error: Player '{player_name}' not found")
+        return
+
+    if player.remove_gold(amount):
+        print(f"✓ Took {amount}{game.currency_symbol} from {player.name} (now has {player.gold}{game.currency_symbol})")
+    else:
+        print(f"Error: Player doesn't have enough {game.currency_name}!")
+
+
+def show_context_header(game):
+    """Display current player and table context."""
+    print("\n" + "=" * 60)
+
+    # Current Player info
+    if game.current_player_name and game.current_player_name in game.players:
+        player = game.players[game.current_player_name]
+        print(f"Current Player: {player.name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
+    else:
+        print("Current Player: None")
+
+    # Current Table info
+    current_table = game.get_current_table()
+    if current_table:
+        print(f"Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}{game.currency_symbol}, {len(current_table.items)} items)")
+    else:
+        print("Current Table: None")
+
+    print("=" * 60)
+
+
 def show_main_menu():
     print("\n" + "=" * 40)
     print("LOOT TABLE SYSTEM")
     print("=" * 40)
+    print("0. Quick Commands")
     print("1. Manage Loot Table")
     print("2. Manage Players")
     print("3. Draw Items")
@@ -697,18 +1660,133 @@ def show_main_menu():
     print("=" * 40)
 
 
+def show_master_items_menu():
+    print("\n--- MASTER ITEMS REGISTRY ---")
+    print("1. Add master item")
+    print("2. Edit master item")
+    print("3. Delete master item")
+    print("4. View all master items")
+    print("5. Back to loot table menu")
+
+
+def manage_master_items(game):
+    """Manage the master items registry."""
+    while True:
+        show_master_items_menu()
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add master item
+            name = input("Enter item name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            item_type = input("Enter item type (misc/equipment/upgrade/consumable): ").strip()
+            if not item_type:
+                item_type = "misc"
+
+            try:
+                gold_per_unit = int(input(f"Enter {game.currency_name} value per unit: ").strip())
+                if gold_per_unit < 0:
+                    print(f"{game.currency_name.capitalize()} value cannot be negative!")
+                    continue
+
+                result = game.add_master_item(name, item_type, gold_per_unit)
+                if result:
+                    print(f"✓ Added master item: {result.name} ({result.item_type}) - {result.gold_value_per_unit}{game.currency_symbol} each")
+                else:
+                    print(f"Item '{name}' already exists in the registry!")
+            except ValueError:
+                print(f"Invalid {game.currency_name} value!")
+
+        elif choice == "2":
+            # Edit master item
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print("\nMaster Items:")
+            for i, item in enumerate(game.master_items):
+                print(f"  {i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
+
+            try:
+                index = int(input("\nEnter item number to edit: ").strip())
+                if index < 0 or index >= len(game.master_items):
+                    print("Invalid item number!")
+                    continue
+
+                item = game.master_items[index]
+                print(f"\nEditing: {item.name}")
+                print("Leave blank to keep current value")
+
+                new_name = input(f"New name [{item.name}]: ").strip()
+                new_type = input(f"New type [{item.item_type}]: ").strip()
+                new_gold = input(f"New {game.currency_name} per unit [{item.gold_value_per_unit}{game.currency_symbol}]: ").strip()
+
+                if new_name:
+                    item.name = new_name
+                if new_type:
+                    item.item_type = new_type
+                if new_gold:
+                    item.gold_value_per_unit = int(new_gold)
+
+                print(f"✓ Updated: {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Delete master item
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print("\nMaster Items:")
+            for i, item in enumerate(game.master_items):
+                print(f"  {i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
+
+            try:
+                index = int(input("\nEnter item number to delete: ").strip())
+                deleted = game.remove_master_item(index)
+                if deleted:
+                    print(f"✓ Deleted: {deleted.name}")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # View all master items
+            if not game.master_items:
+                print("No master items exist!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print("MASTER ITEMS REGISTRY")
+            print(f"{'=' * 60}")
+            for i, item in enumerate(game.master_items):
+                print(f"{i}. {item.name} ({item.item_type}) - {item.gold_value_per_unit}{game.currency_symbol} each")
+            print(f"{'=' * 60}")
+
+        elif choice == "5":
+            break
+        else:
+            print("Invalid choice!")
+
+
 def show_loot_menu():
     print("\n--- LOOT TABLE MENU ---")
     print("1. Select/Create loot table")
-    print("2. Add item to current table")
-    print("3. Edit item in current table")
-    print("4. Delete item from current table")
-    print("5. Edit table settings (name, draw cost)")
-    print("6. Delete current table")
-    print("7. View all items in current table (with weights)")
-    print("8. View rates for players (percentages only)")
-    print("9. View all tables")
-    print("10. Back to main menu")
+    print("2. Manage Master Items Registry")
+    print("3. Add item to current table")
+    print("4. Edit item in current table")
+    print("5. Delete item from current table")
+    print("6. Edit table settings (name, draw cost)")
+    print("7. Delete current table")
+    print("8. View all items in current table (with weights)")
+    print("9. View rates for players (percentages only)")
+    print("10. View all tables")
+    print("11. Back to main menu")
 
 
 def show_player_menu():
@@ -717,7 +1795,8 @@ def show_player_menu():
     print("2. Remove player")
     print("3. View player info")
     print("4. View all players")
-    print("5. Back to main menu")
+    print("5. Set current player")
+    print("6. Back to main menu")
 
 
 def show_admin_menu(currency_name="gold"):
@@ -788,12 +1867,18 @@ def manage_effect_pool(game):
             print("\nAvailable effect types:")
             print("  1. draw_cost_reduction")
             print("  2. double_quantity_chance")
-            effect_type_choice = input("Choose effect type (1-2): ").strip()
+            print("  3. sell_price_increase (for non-crafted items)")
+            print("  4. crafted_sell_price_increase (for crafted items)")
+            effect_type_choice = input("Choose effect type (1-4): ").strip()
 
             if effect_type_choice == '1':
                 effect_type = "draw_cost_reduction"
             elif effect_type_choice == '2':
                 effect_type = "double_quantity_chance"
+            elif effect_type_choice == '3':
+                effect_type = "sell_price_increase"
+            elif effect_type_choice == '4':
+                effect_type = "crafted_sell_price_increase"
             else:
                 print("Invalid effect type!")
                 continue
@@ -804,8 +1889,13 @@ def manage_effect_pool(game):
                     print("Value must be greater than 0!")
                     continue
 
-                is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
-                is_percentage = is_percentage_input == 'y'
+                # double_quantity_chance is always percentage
+                if effect_type == "double_quantity_chance":
+                    is_percentage = True
+                    print("(Note: double_quantity_chance is always a percentage value)")
+                else:
+                    is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
+                    is_percentage = is_percentage_input == 'y'
 
                 weight = float(input("Enter weight (default 1000): ").strip() or "1000")
                 if weight <= 0:
@@ -922,7 +2012,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -932,6 +2022,15 @@ def manage_equipment_upgrades(game):
 
             flat, percent = player.get_total_draw_cost_reduction()
             print(f"Total Draw Cost Reduction: -{flat} flat, -{percent}%")
+
+            double_chance = player.get_double_quantity_chance()
+            print(f"Total Double Quantity Chance: {double_chance}%")
+
+            flat_sell, percent_sell = player.get_sell_price_increase()
+            print(f"Total Sell Price Increase (Non-Crafted): +{flat_sell} flat, +{percent_sell}%")
+
+            flat_craft_sell, percent_craft_sell = player.get_crafted_sell_price_increase()
+            print(f"Total Sell Price Increase (Crafted): +{flat_craft_sell} flat, +{percent_craft_sell}%")
 
             print(f"\nEquipped Items ({len(player.equipped_items)}):")
             if player.equipped_items:
@@ -955,7 +2054,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -991,7 +2090,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1023,7 +2122,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1062,7 +2161,7 @@ def manage_loot_table(game):
         current_table = game.get_current_table()
         if current_table:
             print(
-                f"\n[Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}g, Items: {len(current_table.items)})]")
+                f"\n[Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}{game.currency_symbol}, Items: {len(current_table.items)})]")
         else:
             print("\n[No tables exist! Please create one]")
 
@@ -1075,7 +2174,7 @@ def manage_loot_table(game):
                 print("\nExisting tables:")
                 for i, table in enumerate(game.loot_tables):
                     marker = " <--" if i == game.current_table_index else ""
-                    print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}g, Items: {len(table.items)}){marker}")
+                    print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}{game.currency_symbol}, Items: {len(table.items)}){marker}")
 
                 print("\nEnter table number to select, or 'new' to create new table")
                 selection = input("Choice: ").strip().lower()
@@ -1111,11 +2210,54 @@ def manage_loot_table(game):
                     print("Invalid cost!")
 
         elif choice == "2":
+            # Manage Master Items Registry
+            manage_master_items(game)
+
+        elif choice == "3":
             # Add item
             if not current_table:
                 print("No table selected!")
                 continue
 
+            # Check if master items exist
+            if game.master_items:
+                print("\nChoose how to add item:")
+                print("1. From Master Items Registry")
+                print("2. Create custom item (not in registry)")
+                add_choice = input("Choice: ").strip()
+
+                if add_choice == "1":
+                    # Add from master items
+                    print("\nMaster Items:")
+                    for i, master_item in enumerate(game.master_items):
+                        print(f"  {i}. {master_item.name} ({master_item.item_type}) - {master_item.gold_value_per_unit}{game.currency_symbol} each")
+
+                    try:
+                        item_index = int(input("\nEnter item number: ").strip())
+                        if item_index < 0 or item_index >= len(game.master_items):
+                            print("Invalid item number!")
+                            continue
+
+                        master_item = game.master_items[item_index]
+                        quantity = int(input("Enter quantity (default 1): ").strip() or "1")
+                        weight = float(input("Enter weight: ").strip())
+
+                        if weight <= 0 or quantity < 1:
+                            print("Invalid values!")
+                            continue
+
+                        loot_item = master_item.create_loot_item(quantity, weight)
+                        current_table.items.append(loot_item)
+                        display_name = f"{quantity}x {master_item.name}" if quantity > 1 else master_item.name
+                        print(f"✓ Added '{display_name}' to {current_table.name}")
+                    except ValueError:
+                        print("Invalid input!")
+                    continue
+                elif add_choice != "2":
+                    print("Invalid choice!")
+                    continue
+
+            # Create custom item
             name = input("Enter item name: ").strip()
             if not name:
                 print("Item name cannot be empty!")
@@ -1137,7 +2279,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "3":
+        elif choice == "4":
             # Edit item
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -1173,7 +2315,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "4":
+        elif choice == "5":
             # Delete item
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -1195,7 +2337,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "5":
+        elif choice == "6":
             # Edit table settings
             if not current_table:
                 print("No table selected!")
@@ -1217,7 +2359,7 @@ def manage_loot_table(game):
 
             print(f"✓ Updated table settings!")
 
-        elif choice == "6":
+        elif choice == "7":
             # Delete table
             if not current_table:
                 print("No table to delete!")
@@ -1234,7 +2376,7 @@ def manage_loot_table(game):
                 game.current_table_index = min(game.current_table_index, len(game.loot_tables) - 1)
                 print(f"✓ Deleted table '{deleted_name}'")
 
-        elif choice == "7":
+        elif choice == "8":
             # View all items
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -1246,7 +2388,7 @@ def manage_loot_table(game):
                 percentage = (item.weight / total_weight) * 100
                 print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}{game.currency_symbol}")
 
-        elif choice == "8":
+        elif choice == "9":
             # View rates for players
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -1268,7 +2410,7 @@ def manage_loot_table(game):
                 print(f"    Value: {item.gold_value}{game.currency_symbol}")
                 print()
 
-        elif choice == "9":
+        elif choice == "10":
             # View all tables
             if not game.loot_tables:
                 print("No tables exist!")
@@ -1277,9 +2419,9 @@ def manage_loot_table(game):
             print("\nAll Loot Tables:")
             for i, table in enumerate(game.loot_tables):
                 marker = " <-- CURRENT" if i == game.current_table_index else ""
-                print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}g, Items: {len(table.items)}){marker}")
+                print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}{game.currency_symbol}, Items: {len(table.items)}){marker}")
 
-        elif choice == "10":
+        elif choice == "11":
             break
 
 
@@ -1333,9 +2475,32 @@ def manage_players(game):
 
             print("\nAll Players:")
             for name, player in game.players.items():
-                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items{current_marker}")
 
         elif choice == "5":
+            # Set current player
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            print("\nAvailable players:")
+            for name, player in game.players.items():
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
+
+            player_name = input("\nEnter player name to set as current (or 'none' to clear): ").strip()
+
+            if player_name.lower() == 'none':
+                game.current_player_name = None
+                print("✓ Cleared current player")
+            elif player_name in game.players:
+                game.current_player_name = player_name
+                print(f"✓ Set current player to '{player_name}'")
+            else:
+                print(f"Player '{player_name}' not found!")
+
+        elif choice == "6":
             break
 
 
@@ -1367,9 +2532,10 @@ def draw_items_menu(game):
 
         print("\nAvailable players:")
         for name, player in game.players.items():
-            print(f"  - {name} ({player.gold}{game.currency_symbol})")
+            current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+            print(f"  - {name} ({player.gold}{game.currency_symbol}){current_marker}")
 
-        player_name = input("\nEnter player name: ").strip()
+        player_name = get_player_name_input(game)
         player = game.get_player(player_name)
 
         if not player:
@@ -1405,15 +2571,40 @@ def draw_items_menu(game):
         # Get double quantity chance
         double_chance = player.get_double_quantity_chance()
 
+        # Get sell price increase for non-crafted items
+        flat_price, percent_price = player.get_sell_price_increase()
+
         total_value = 0
         doubled_count = 0
+        price_boosted_count = 0
 
         for i, item in enumerate(items, 1):
+            # Apply sell price increase to non-crafted items
+            price_boosted = False
+            if flat_price > 0 or percent_price > 0:
+                original_value = item.gold_value
+                item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+                if item.gold_value > original_value:
+                    price_boosted_count += 1
+                    price_boosted = True
+
             # Check if we should double the quantity
+            doubled = False
             if double_chance > 0 and random.random() * 100 < double_chance:
                 item.quantity *= 2
+                item.gold_value *= 2
                 doubled_count += 1
-                print(f"  {i}. {item} ✨ DOUBLED!")
+                doubled = True
+
+            # Display item with indicators
+            indicators = []
+            if doubled:
+                indicators.append("✨ DOUBLED!")
+            if price_boosted:
+                indicators.append("💰 PRICE BOOST!")
+
+            if indicators:
+                print(f"  {i}. {item} {' '.join(indicators)}")
             else:
                 print(f"  {i}. {item}")
 
@@ -1422,6 +2613,9 @@ def draw_items_menu(game):
 
         if doubled_count > 0:
             print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+
+        if price_boosted_count > 0:
+            print(f"💰 {price_boosted_count} item(s) had their value increased! (+{flat_price} flat, +{percent_price}%)")
 
         net_value = total_value - total_cost
         print(f"\nTotal value: {total_value}{game.currency_symbol}")
@@ -1438,9 +2632,10 @@ def sell_items_menu(game):
 
     print("\nAvailable players:")
     for name, player in game.players.items():
-        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
+        current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items){current_marker}")
 
-    player_name = input("\nEnter player name: ").strip()
+    player_name = get_player_name_input(game)
     player = game.get_player(player_name)
 
     if not player:
@@ -1517,12 +2712,21 @@ def manage_crafting(game):
 
                 print("\nType 'done' when finished adding ingredients")
                 while True:
-                    ingredient = input("Add ingredient: ").strip()
+                    ingredient = input("Add ingredient (or 'done' to finish): ").strip()
                     if ingredient.lower() == 'done':
                         break
                     if ingredient:
-                        recipe.add_ingredient(ingredient)
-                        print(f"✓ Added {ingredient}")
+                        try:
+                            quantity = int(input(f"How many {ingredient}? ").strip())
+                            if quantity <= 0:
+                                print("Quantity must be at least 1!")
+                                continue
+                            # Add the ingredient the specified number of times
+                            for _ in range(quantity):
+                                recipe.add_ingredient(ingredient)
+                            print(f"✓ Added {quantity}x {ingredient}")
+                        except ValueError:
+                            print("Invalid quantity! Please enter a number.")
 
                 if not recipe.ingredients:
                     print("Recipe must have at least one ingredient!")
@@ -1572,9 +2776,10 @@ def manage_crafting(game):
 
             print("\nAvailable players:")
             for name, player in game.players.items():
-                print(f"  - {name}")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
 
-            player_name = input("\nEnter player name: ").strip()
+            player_name = get_player_name_input(game)
             player = game.get_player(player_name)
 
             if not player:
@@ -1598,13 +2803,19 @@ def manage_crafting(game):
                 print("Type 'done' to stop crafting, or it will auto-stop when out of ingredients")
 
                 while True:
-                    # Check if player has all ingredients
-                    player_item_names = [item.name for item in player.inventory]
+                    # Count required quantities for each ingredient
+                    required_ingredients = {}
+                    for ingredient in recipe.ingredients:
+                        required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
+
+                    # Check if player has all ingredients in required quantities
                     missing_ingredients = []
 
-                    for ingredient in recipe.ingredients:
-                        if ingredient not in player_item_names:
-                            missing_ingredients.append(ingredient)
+                    for ingredient, required_count in required_ingredients.items():
+                        # Count total quantity of this ingredient across all stacks
+                        total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
+                        if total_quantity < required_count:
+                            missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
 
                     if missing_ingredients:
                         if crafted_count > 0:
@@ -1613,12 +2824,9 @@ def manage_crafting(game):
                             print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
                         break
 
-                    # Remove ingredients from inventory
+                    # Remove ingredients from inventory (consumes from stacks)
                     for ingredient in recipe.ingredients:
-                        for i, item in enumerate(player.inventory):
-                            if item.name == ingredient:
-                                player.remove_item(i)
-                                break
+                        player.consume_item_by_name(ingredient, 1)
 
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
@@ -1679,6 +2887,14 @@ def manage_crafting(game):
                             print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
                     else:
                         print(f"✓ Crafted {recipe.output_name}!")
+
+                    # Apply crafted sell price increase
+                    flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
+                    if flat_craft_price > 0 or percent_craft_price > 0:
+                        original_craft_value = crafted_item.gold_value
+                        crafted_item.gold_value = player.calculate_item_value(original_craft_value, is_crafted=True)
+                        if crafted_item.gold_value > original_craft_value:
+                            print(f"💰 Crafted item value increased: {original_craft_value}{game.currency_symbol} → {crafted_item.gold_value}{game.currency_symbol} (+{flat_craft_price} flat, +{percent_craft_price}%)")
 
                     player.add_item(crafted_item)
                     crafted_count += 1
@@ -1831,9 +3047,10 @@ def manage_enchantments(game):
 
             print("\nAvailable players:")
             for name, player in game.players.items():
-                print(f"  - {name}")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
 
-            player_name = input("\nEnter player name: ").strip()
+            player_name = get_player_name_input(game)
             player = game.get_player(player_name)
 
             if not player:
@@ -1910,7 +3127,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1932,7 +3149,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1960,7 +3177,7 @@ def admin_menu(game):
                 print("No loot tables exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1982,7 +3199,8 @@ def admin_menu(game):
                     continue
 
                 item = all_items[index]
-                player.add_item(item)
+                item_copy = copy.deepcopy(item)
+                player.add_item(item_copy)
                 print(f"✓ Gifted {item} to {player.name}")
             except ValueError:
                 print("Invalid input!")
@@ -1992,7 +3210,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -2099,10 +3317,13 @@ if __name__ == "__main__":
             signal_handler(signal.SIGINT, None)
 
     while True:
+        show_context_header(game)
         show_main_menu()
-        choice = input("Enter your choice (1-9): ").strip()
+        choice = input("Enter your choice (0-9): ").strip()
 
-        if choice == "1":
+        if choice == "0":
+            quick_commands_menu(game)
+        elif choice == "1":
             manage_loot_table(game)
         elif choice == "2":
             manage_players(game)
@@ -2137,4 +3358,4 @@ if __name__ == "__main__":
             break
         else:
 
-            print("Invalid choice! Please enter 1-9.")
+            print("Invalid choice! Please enter 0-9.")
