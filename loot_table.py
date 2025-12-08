@@ -302,6 +302,7 @@ class GameSystem:
     def __init__(self):
         self.loot_tables = []  # List of LootTable objects
         self.current_table_index = 0  # Currently selected table
+        self.current_player_name = None  # Currently selected player
         self.players = {}
         self.crafting_recipes = []
         self.enchantments = []
@@ -336,6 +337,9 @@ class GameSystem:
     def remove_player(self, name):
         if name in self.players:
             del self.players[name]
+            # Clear current player if they were removed
+            if self.current_player_name == name:
+                self.current_player_name = None
             return True
         return False
 
@@ -362,6 +366,7 @@ class GameSystem:
                     for table in self.loot_tables
                 ],
                 'current_table_index': self.current_table_index,
+                'current_player_name': self.current_player_name,
                 'players': {
                     name: {
                         'gold': player.gold,
@@ -517,6 +522,7 @@ class GameSystem:
                         table.items.append(item)
                     self.loot_tables.append(table)
                 self.current_table_index = data.get('current_table_index', 0)
+                self.current_player_name = data.get('current_player_name')
             elif 'loot_table' in data:
                 # Old format: single table - convert it
                 table = LootTable("Default", 100)
@@ -681,6 +687,40 @@ class GameSystem:
             return False
 
 
+def get_player_name_input(game, prompt="Enter player name"):
+    """Get player name from user, defaulting to current player if set."""
+    if game.current_player_name and game.current_player_name in game.players:
+        default_prompt = f"{prompt} (default: {game.current_player_name}): "
+        player_name = input(default_prompt).strip()
+        # If empty, use current player
+        if not player_name:
+            return game.current_player_name
+        return player_name
+    else:
+        return input(f"{prompt}: ").strip()
+
+
+def show_context_header(game):
+    """Display current player and table context."""
+    print("\n" + "=" * 60)
+
+    # Current Player info
+    if game.current_player_name and game.current_player_name in game.players:
+        player = game.players[game.current_player_name]
+        print(f"Current Player: {player.name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
+    else:
+        print("Current Player: None")
+
+    # Current Table info
+    current_table = game.get_current_table()
+    if current_table:
+        print(f"Current Table: {current_table.name} (Draw Cost: {current_table.draw_cost}{game.currency_symbol}, {len(current_table.items)} items)")
+    else:
+        print("Current Table: None")
+
+    print("=" * 60)
+
+
 def show_main_menu():
     print("\n" + "=" * 40)
     print("LOOT TABLE SYSTEM")
@@ -717,7 +757,8 @@ def show_player_menu():
     print("2. Remove player")
     print("3. View player info")
     print("4. View all players")
-    print("5. Back to main menu")
+    print("5. Set current player")
+    print("6. Back to main menu")
 
 
 def show_admin_menu(currency_name="gold"):
@@ -922,7 +963,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -955,7 +996,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -991,7 +1032,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1023,7 +1064,7 @@ def manage_equipment_upgrades(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1333,9 +1374,32 @@ def manage_players(game):
 
             print("\nAll Players:")
             for name, player in game.players.items():
-                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}: {player.gold}{game.currency_symbol}, {len(player.inventory)} items{current_marker}")
 
         elif choice == "5":
+            # Set current player
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            print("\nAvailable players:")
+            for name, player in game.players.items():
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
+
+            player_name = input("\nEnter player name to set as current (or 'none' to clear): ").strip()
+
+            if player_name.lower() == 'none':
+                game.current_player_name = None
+                print("✓ Cleared current player")
+            elif player_name in game.players:
+                game.current_player_name = player_name
+                print(f"✓ Set current player to '{player_name}'")
+            else:
+                print(f"Player '{player_name}' not found!")
+
+        elif choice == "6":
             break
 
 
@@ -1367,9 +1431,10 @@ def draw_items_menu(game):
 
         print("\nAvailable players:")
         for name, player in game.players.items():
-            print(f"  - {name} ({player.gold}{game.currency_symbol})")
+            current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+            print(f"  - {name} ({player.gold}{game.currency_symbol}){current_marker}")
 
-        player_name = input("\nEnter player name: ").strip()
+        player_name = get_player_name_input(game)
         player = game.get_player(player_name)
 
         if not player:
@@ -1438,9 +1503,10 @@ def sell_items_menu(game):
 
     print("\nAvailable players:")
     for name, player in game.players.items():
-        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items)")
+        current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+        print(f"  - {name} ({player.gold}{game.currency_symbol}, {len(player.inventory)} items){current_marker}")
 
-    player_name = input("\nEnter player name: ").strip()
+    player_name = get_player_name_input(game)
     player = game.get_player(player_name)
 
     if not player:
@@ -1572,9 +1638,10 @@ def manage_crafting(game):
 
             print("\nAvailable players:")
             for name, player in game.players.items():
-                print(f"  - {name}")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
 
-            player_name = input("\nEnter player name: ").strip()
+            player_name = get_player_name_input(game)
             player = game.get_player(player_name)
 
             if not player:
@@ -1831,9 +1898,10 @@ def manage_enchantments(game):
 
             print("\nAvailable players:")
             for name, player in game.players.items():
-                print(f"  - {name}")
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
 
-            player_name = input("\nEnter player name: ").strip()
+            player_name = get_player_name_input(game)
             player = game.get_player(player_name)
 
             if not player:
@@ -1910,7 +1978,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1932,7 +2000,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1960,7 +2028,7 @@ def admin_menu(game):
                 print("No loot tables exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -1992,7 +2060,7 @@ def admin_menu(game):
                 print("No players exist!")
                 continue
 
-            name = input("Enter player name: ").strip()
+            name = get_player_name_input(game)
             player = game.get_player(name)
             if not player:
                 print(f"Player '{name}' not found!")
@@ -2099,6 +2167,7 @@ if __name__ == "__main__":
             signal_handler(signal.SIGINT, None)
 
     while True:
+        show_context_header(game)
         show_main_menu()
         choice = input("Enter your choice (1-9): ").strip()
 
