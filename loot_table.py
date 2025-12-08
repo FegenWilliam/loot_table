@@ -36,9 +36,20 @@ class LootItem:
         self.enchantments = []
         self.effects = []  # For Equipment and Upgrade items
 
-    def add_enchantment(self, enchantment):
-        self.enchantments.append(enchantment)
-        self.gold_value += enchantment.gold_value
+    def add_enchantment(self, enchantment, rolled_value=None):
+        """Add an enchantment to this item. If rolled_value is provided, use it; otherwise roll a new value."""
+        if rolled_value is None:
+            rolled_value = enchantment.apply_to_item(self)
+        else:
+            # Apply the provided rolled value
+            if enchantment.is_percentage:
+                change = self.gold_value * (rolled_value / 100.0)
+                self.gold_value = max(0, int(self.gold_value + change))
+            else:
+                self.gold_value = max(0, int(self.gold_value + rolled_value))
+
+        # Store enchantment with its rolled value as a tuple
+        self.enchantments.append((enchantment, rolled_value))
 
     def add_effect(self, effect):
         self.effects.append(effect)
@@ -51,8 +62,13 @@ class LootItem:
             base_name = f"[{self.rarity}] {base_name}"
 
         if self.enchantments:
-            enchant_names = ", ".join([e.name for e in self.enchantments])
-            return f"{base_name} [{enchant_names}]"
+            enchant_strs = []
+            for ench, rolled_value in self.enchantments:
+                if ench.is_percentage:
+                    enchant_strs.append(f"{ench.name} {rolled_value:+.1f}%")
+                else:
+                    enchant_strs.append(f"{ench.name} {rolled_value:+.0f}g")
+            return f"{base_name} [{', '.join(enchant_strs)}]"
         return base_name
 
     def get_effects_display(self):
@@ -77,14 +93,37 @@ class LootItem:
 
 
 class Enchantment:
-    def __init__(self, name, enchant_type, gold_value, weight=1000):
+    def __init__(self, name, enchant_type, min_value, max_value, is_percentage=False, cost_amount=1):
         self.name = name
         self.enchant_type = enchant_type
-        self.gold_value = gold_value
-        self.weight = weight
+        self.min_value = min_value  # Can be negative for penalty
+        self.max_value = max_value  # Can be positive for bonus
+        self.is_percentage = is_percentage  # True for %, False for flat
+        self.cost_amount = cost_amount  # Individual cost for this enchantment
+
+    def roll_value(self):
+        """Roll a random value within the enchantment's range."""
+        return random.uniform(self.min_value, self.max_value)
+
+    def apply_to_item(self, item):
+        """Apply this enchantment to an item and return the rolled value."""
+        rolled_value = self.roll_value()
+
+        if self.is_percentage:
+            # Apply percentage change to gold value
+            change = item.gold_value * (rolled_value / 100.0)
+            item.gold_value = max(0, int(item.gold_value + change))
+        else:
+            # Apply flat change to gold value
+            item.gold_value = max(0, int(item.gold_value + rolled_value))
+
+        return rolled_value
 
     def __str__(self):
-        return f"{self.name} ({self.enchant_type}, +{self.gold_value}g)"
+        if self.is_percentage:
+            return f"{self.name} ({self.enchant_type}, {self.min_value:+.1f}% to {self.max_value:+.1f}%, Cost: {self.cost_amount})"
+        else:
+            return f"{self.name} ({self.enchant_type}, {self.min_value:+.0f}g to {self.max_value:+.0f}g, Cost: {self.cost_amount})"
 
     def __repr__(self):
         return self.__str__()
@@ -573,10 +612,13 @@ class GameSystem:
                                     {
                                         'name': ench.name,
                                         'enchant_type': ench.enchant_type,
-                                        'gold_value': ench.gold_value,
-                                        'weight': ench.weight
+                                        'min_value': ench.min_value,
+                                        'max_value': ench.max_value,
+                                        'is_percentage': ench.is_percentage,
+                                        'cost_amount': ench.cost_amount,
+                                        'rolled_value': rolled_value
                                     }
-                                    for ench in item.enchantments
+                                    for ench, rolled_value in item.enchantments
                                 ],
                                 'effects': [
                                     {
@@ -651,8 +693,10 @@ class GameSystem:
                     {
                         'name': ench.name,
                         'enchant_type': ench.enchant_type,
-                        'gold_value': ench.gold_value,
-                        'weight': ench.weight
+                        'min_value': ench.min_value,
+                        'max_value': ench.max_value,
+                        'is_percentage': ench.is_percentage,
+                        'cost_amount': ench.cost_amount
                     }
                     for ench in self.enchantments
                 ],
@@ -764,13 +808,31 @@ class GameSystem:
                     )
                     # Load enchantments
                     for ench_data in item_data.get('enchantments', []):
-                        ench = Enchantment(
-                            ench_data['name'],
-                            ench_data['enchant_type'],
-                            ench_data['gold_value'],
-                            ench_data.get('weight', 1000)
-                        )
-                        item.enchantments.append(ench)
+                        # Handle both old and new format
+                        if 'min_value' in ench_data:
+                            # New format
+                            ench = Enchantment(
+                                ench_data['name'],
+                                ench_data['enchant_type'],
+                                ench_data['min_value'],
+                                ench_data['max_value'],
+                                ench_data.get('is_percentage', False),
+                                ench_data.get('cost_amount', 1)
+                            )
+                            rolled_value = ench_data.get('rolled_value', 0)
+                            item.enchantments.append((ench, rolled_value))
+                        else:
+                            # Old format - convert to new format
+                            gold_value = ench_data.get('gold_value', 0)
+                            ench = Enchantment(
+                                ench_data['name'],
+                                ench_data['enchant_type'],
+                                gold_value,  # min_value
+                                gold_value,  # max_value (same as min for old format)
+                                False,  # is_percentage
+                                1  # cost_amount
+                            )
+                            item.enchantments.append((ench, gold_value))
                     # Load effects
                     for eff_data in item_data.get('effects', []):
                         eff = Effect(
@@ -845,12 +907,28 @@ class GameSystem:
             # Load enchantments
             self.enchantments = []
             for ench_data in data.get('enchantments', []):
-                ench = Enchantment(
-                    ench_data['name'],
-                    ench_data['enchant_type'],
-                    ench_data['gold_value'],
-                    ench_data.get('weight', 1000)
-                )
+                # Handle both old and new format
+                if 'min_value' in ench_data:
+                    # New format
+                    ench = Enchantment(
+                        ench_data['name'],
+                        ench_data['enchant_type'],
+                        ench_data['min_value'],
+                        ench_data['max_value'],
+                        ench_data.get('is_percentage', False),
+                        ench_data.get('cost_amount', 1)
+                    )
+                else:
+                    # Old format - convert to new format
+                    gold_value = ench_data.get('gold_value', 0)
+                    ench = Enchantment(
+                        ench_data['name'],
+                        ench_data['enchant_type'],
+                        gold_value,  # min_value
+                        gold_value,  # max_value (same as min for old format)
+                        False,  # is_percentage
+                        1  # cost_amount
+                    )
                 self.enchantments.append(ench)
 
             # Load global enchantment cost
@@ -3281,20 +3359,33 @@ def manage_enchantments(game):
                 print("Name cannot be empty!")
                 continue
 
-            enchant_type = input("Enter enchantment type (e.g., weapon, armor): ").strip() or "misc"
+            enchant_type = input("Enter enchantment type (e.g., weapon, armor, misc): ").strip() or "misc"
+
+            is_percentage_input = input("Is this a percentage-based enchantment? (y/n): ").strip().lower()
+            is_percentage = is_percentage_input == 'y'
 
             try:
-                gold_value = int(input(f"Enter {game.currency_name} value bonus: ").strip())
-                if gold_value < 0:
-                    print(f"Invalid {game.currency_name} value!")
+                if is_percentage:
+                    print("\nEnter percentage range (can be negative for penalty, positive for bonus)")
+                    print("Example: -50 to 50 means it could reduce value by 50% or increase by 50%")
+                    min_value = float(input("Minimum percentage: ").strip())
+                    max_value = float(input("Maximum percentage: ").strip())
+                else:
+                    print(f"\nEnter flat {game.currency_name} range (can be negative for penalty, positive for bonus)")
+                    print("Example: -100 to 200 means it could reduce value by 100g or increase by 200g")
+                    min_value = float(input(f"Minimum {game.currency_name} value: ").strip())
+                    max_value = float(input(f"Maximum {game.currency_name} value: ").strip())
+
+                if min_value > max_value:
+                    print("Minimum value cannot be greater than maximum value!")
                     continue
 
-                weight = float(input("Enter weight (default 1000): ").strip() or "1000")
-                if weight <= 0:
-                    print("Invalid weight!")
+                cost_amount = int(input(f"Enter cost (number of {game.enchant_cost_item or 'cost items'} required): ").strip() or "1")
+                if cost_amount < 0:
+                    print("Cost cannot be negative!")
                     continue
 
-                enchant = Enchantment(name, enchant_type, gold_value, weight)
+                enchant = Enchantment(name, enchant_type, min_value, max_value, is_percentage, cost_amount)
                 game.enchantments.append(enchant)
                 print(f"✓ Added enchantment: {enchant}")
             except ValueError:
@@ -3307,7 +3398,7 @@ def manage_enchantments(game):
 
             print("\nCurrent enchantments:")
             for i, ench in enumerate(game.enchantments):
-                print(f"  {i}. {ench} (weight: {ench.weight})")
+                print(f"  {i}. {ench}")
 
             try:
                 index = int(input("\nEnter enchantment number to edit: ").strip())
@@ -3321,17 +3412,30 @@ def manage_enchantments(game):
 
                 new_name = input(f"New name [{ench.name}]: ").strip()
                 new_type = input(f"New type [{ench.enchant_type}]: ").strip()
-                gold_input = input(f"New {game.currency_name} value [{ench.gold_value}]: ").strip()
-                weight_input = input(f"New weight [{ench.weight}]: ").strip()
+
+                value_type = "percentage" if ench.is_percentage else "flat"
+                min_input = input(f"New minimum {value_type} [{ench.min_value}]: ").strip()
+                max_input = input(f"New maximum {value_type} [{ench.max_value}]: ").strip()
+                cost_input = input(f"New cost [{ench.cost_amount}]: ").strip()
 
                 if new_name:
                     ench.name = new_name
                 if new_type:
                     ench.enchant_type = new_type
-                if gold_input:
-                    ench.gold_value = int(gold_input)
-                if weight_input:
-                    ench.weight = float(weight_input)
+                if min_input:
+                    new_min = float(min_input)
+                    if new_min <= ench.max_value:
+                        ench.min_value = new_min
+                    else:
+                        print("Minimum cannot be greater than maximum!")
+                if max_input:
+                    new_max = float(max_input)
+                    if new_max >= ench.min_value:
+                        ench.max_value = new_max
+                    else:
+                        print("Maximum cannot be less than minimum!")
+                if cost_input:
+                    ench.cost_amount = int(cost_input)
 
                 print(f"✓ Updated enchantment!")
             except ValueError:
@@ -3381,14 +3485,12 @@ def manage_enchantments(game):
                 print("No enchantments exist!")
                 continue
 
-            print(f"\n{'=' * 50}")
-            print(f"Global Enchantment Cost: {game.enchant_cost_amount}x {game.enchant_cost_item or 'None'}")
-            print(f"{'=' * 50}")
+            print(f"\n{'=' * 60}")
+            print(f"Global Enchantment Cost Item: {game.enchant_cost_item or 'None'}")
+            print(f"{'=' * 60}")
             print("\nAll Enchantments:")
-            total_weight = sum(e.weight for e in game.enchantments)
             for i, ench in enumerate(game.enchantments):
-                percentage = (ench.weight / total_weight) * 100
-                print(f"  {i}. {ench} (weight: {ench.weight}, {percentage:.2f}%)")
+                print(f"  {i}. {ench}")
 
         elif choice == "6":
             if not game.enchantments:
@@ -3427,43 +3529,58 @@ def manage_enchantments(game):
 
                 item = player.inventory[item_index]
 
-                compatible_enchants = [e for e in game.enchantments if e.enchant_type == item.item_type]
+                # Show all enchantments compatible with this item type
+                compatible_enchants = [e for e in game.enchantments if e.enchant_type == item.item_type or e.enchant_type == "misc"]
 
                 if not compatible_enchants:
                     print(f"No enchantments compatible with type '{item.item_type}'!")
                     continue
 
-                weights = [e.weight for e in compatible_enchants]
-                drawn_enchant = random.choices(compatible_enchants, weights=weights, k=1)[0]
+                print(f"\nCompatible enchantments for {item.name}:")
+                for i, ench in enumerate(compatible_enchants):
+                    print(f"  {i}. {ench}")
 
-                print(f"\n🎲 Drew enchantment: {drawn_enchant}")
+                ench_index = int(input("\nSelect enchantment number: ").strip())
+                if ench_index < 0 or ench_index >= len(compatible_enchants):
+                    print("Invalid enchantment number!")
+                    continue
 
+                selected_enchant = compatible_enchants[ench_index]
+
+                # Check if player has enough cost items
                 if game.enchant_cost_item:
-                    cost_item_count = sum(1 for inv_item in player.inventory if inv_item.name == game.enchant_cost_item)
+                    # Count total quantity of cost item
+                    cost_item_count = sum(inv_item.quantity for inv_item in player.inventory if inv_item.name == game.enchant_cost_item)
 
-                    if cost_item_count < game.enchant_cost_amount:
-                        print(
-                            f"❌ Not enough {game.enchant_cost_item}! Need {game.enchant_cost_amount}, have {cost_item_count}")
+                    if cost_item_count < selected_enchant.cost_amount:
+                        print(f"❌ Not enough {game.enchant_cost_item}! Need {selected_enchant.cost_amount}, have {cost_item_count}")
                         continue
 
-                    removed_count = 0
-                    while removed_count < game.enchant_cost_amount:
-                        for i, inv_item in enumerate(player.inventory):
-                            if inv_item.name == game.enchant_cost_item:
-                                player.remove_item(i)
-                                removed_count += 1
-                                if i < item_index:
-                                    item_index -= 1
-                                break
+                    # Consume the cost items
+                    player.consume_item_by_name(game.enchant_cost_item, selected_enchant.cost_amount)
+                    print(f"💰 Consumed {selected_enchant.cost_amount}x {game.enchant_cost_item}")
 
-                    print(f"💰 Consumed {game.enchant_cost_amount}x {game.enchant_cost_item}")
+                    # Update item_index if items were removed before it
+                    new_item_index = 0
+                    for i, inv_item in enumerate(player.inventory):
+                        if inv_item is item:
+                            item_index = i
+                            break
 
-                    item = player.inventory[item_index]
+                # Apply the enchantment and get the rolled value
+                original_value = item.gold_value
+                rolled_value = selected_enchant.apply_to_item(item)
 
-                item.add_enchantment(drawn_enchant)
+                # Store the enchantment with its rolled value
+                item.enchantments.append((selected_enchant, rolled_value))
 
-                print(f"✓ Enchanted {item.name} with {drawn_enchant.name}!")
-                print(f"New item: {item}")
+                print(f"\n✨ Applied enchantment: {selected_enchant.name}")
+                if selected_enchant.is_percentage:
+                    print(f"   Rolled: {rolled_value:+.1f}%")
+                else:
+                    print(f"   Rolled: {rolled_value:+.0f}g")
+                print(f"   Item value: {original_value}g → {item.gold_value}g")
+                print(f"\n✓ New item: {item}")
             except ValueError:
                 print("Invalid input!")
 
