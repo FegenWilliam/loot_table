@@ -1091,6 +1091,10 @@ def quick_draw(game, args):
     price_boosted_count = 0
 
     for i, item in enumerate(items, 1):
+        # Roll rarity for Equipment items
+        if item.item_type.lower() == "equipment" and not item.rarity:
+            item.rarity = game.rarity_system.roll_rarity()
+
         # Apply sell price increase
         price_boosted = False
         if flat_price > 0 or percent_price > 0:
@@ -2579,6 +2583,10 @@ def draw_items_menu(game):
         price_boosted_count = 0
 
         for i, item in enumerate(items, 1):
+            # Roll rarity for Equipment items
+            if item.item_type.lower() == "equipment" and not item.rarity:
+                item.rarity = game.rarity_system.roll_rarity()
+
             # Apply sell price increase to non-crafted items
             price_boosted = False
             if flat_price > 0 or percent_price > 0:
@@ -3200,8 +3208,14 @@ def admin_menu(game):
 
                 item = all_items[index]
                 item_copy = copy.deepcopy(item)
+
+                # Roll rarity for Equipment items
+                if item_copy.item_type.lower() == "equipment" and not item_copy.rarity:
+                    item_copy.rarity = game.rarity_system.roll_rarity()
+                    print(f"✨ Rolled [{item_copy.rarity}] rarity!")
+
                 player.add_item(item_copy)
-                print(f"✓ Gifted {item} to {player.name}")
+                print(f"✓ Gifted {item_copy} to {player.name}")
             except ValueError:
                 print("Invalid input!")
 
