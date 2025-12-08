@@ -967,6 +967,7 @@ def quick_draw(game, args):
         doubled = False
         if double_chance > 0 and random.random() * 100 < double_chance:
             item.quantity *= 2
+            item.gold_value *= 2
             doubled_count += 1
             doubled = True
 
@@ -1613,8 +1614,13 @@ def manage_effect_pool(game):
                     print("Value must be greater than 0!")
                     continue
 
-                is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
-                is_percentage = is_percentage_input == 'y'
+                # double_quantity_chance is always percentage
+                if effect_type == "double_quantity_chance":
+                    is_percentage = True
+                    print("(Note: double_quantity_chance is always a percentage value)")
+                else:
+                    is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
+                    is_percentage = is_percentage_input == 'y'
 
                 weight = float(input("Enter weight (default 1000): ").strip() or "1000")
                 if weight <= 0:
@@ -2268,6 +2274,7 @@ def draw_items_menu(game):
             doubled = False
             if double_chance > 0 and random.random() * 100 < double_chance:
                 item.quantity *= 2
+                item.gold_value *= 2
                 doubled_count += 1
                 doubled = True
 
