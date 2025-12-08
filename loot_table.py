@@ -169,12 +169,74 @@ class Player:
         self.consumed_upgrades = []  # Upgrades that have been consumed
 
     def add_item(self, item):
+        """Add item to inventory with automatic stacking."""
+        # Items with enchantments, effects, or rarity don't stack (they're unique)
+        if item.enchantments or item.effects or item.rarity:
+            self.inventory.append(item)
+            return
+
+        # Try to find existing stack with same name and type
+        for existing_item in self.inventory:
+            if (existing_item.name == item.name and
+                existing_item.item_type == item.item_type and
+                not existing_item.enchantments and
+                not existing_item.effects and
+                not existing_item.rarity):
+                # Stack found - combine quantities and values
+                existing_item.quantity += item.quantity
+                existing_item.gold_value += item.gold_value
+                return
+
+        # No stack found - add as new item
         self.inventory.append(item)
 
     def remove_item(self, index):
         if 0 <= index < len(self.inventory):
             return self.inventory.pop(index)
         return None
+
+    def consume_item_by_name(self, item_name, count=1):
+        """
+        Consume a specific count of items by name from stacks.
+        Returns True if successful, False if not enough items.
+        """
+        # Find all matching items
+        total_available = 0
+        matching_items = []
+
+        for i, item in enumerate(self.inventory):
+            if item.name == item_name:
+                total_available += item.quantity
+                matching_items.append((i, item))
+
+        if total_available < count:
+            return False
+
+        # Consume from stacks
+        remaining_to_consume = count
+        items_to_remove = []
+
+        for idx, (inv_idx, item) in enumerate(matching_items):
+            if remaining_to_consume <= 0:
+                break
+
+            if item.quantity <= remaining_to_consume:
+                # Consume entire stack
+                remaining_to_consume -= item.quantity
+                items_to_remove.append(inv_idx)
+            else:
+                # Consume partial stack
+                # Calculate value per unit
+                value_per_unit = item.gold_value / item.quantity
+                item.quantity -= remaining_to_consume
+                item.gold_value -= value_per_unit * remaining_to_consume
+                remaining_to_consume = 0
+
+        # Remove consumed stacks (in reverse order to maintain indices)
+        for inv_idx in sorted(items_to_remove, reverse=True):
+            self.inventory.pop(inv_idx)
+
+        return True
 
     def equip_item(self, item):
         """Equip an equipment item."""
@@ -1128,32 +1190,52 @@ def quick_sell(game, args):
         print(f"{player.name} has no items to sell!")
         return
 
-    # Find matching items
-    matching_items = [(i, item) for i, item in enumerate(player.inventory) if item.name.lower() == item_name.lower()]
+    # Find matching items and count total quantity across stacks
+    matching_items = []
+    total_quantity = 0
+
+    for i, item in enumerate(player.inventory):
+        if item.name.lower() == item_name.lower():
+            matching_items.append((i, item))
+            total_quantity += item.quantity
 
     if not matching_items:
         print(f"Error: No items named '{item_name}' found in inventory")
         return
 
-    if len(matching_items) < count:
-        print(f"Error: Player only has {len(matching_items)}x {item_name}, cannot sell {count}")
+    if total_quantity < count:
+        print(f"Error: Player only has {total_quantity}x {item_name}, cannot sell {count}")
         return
 
-    # Sell the requested count
+    # Sell the requested count from stacks
     total_gold = 0
-    sold_count = 0
+    remaining_to_sell = count
+    items_to_remove = []
 
-    for i in range(count):
-        idx, item = matching_items[i]
-        # Adjust index as we remove items
-        adjusted_idx = idx - sold_count
-        removed_item = player.remove_item(adjusted_idx)
-        if removed_item:
-            total_gold += removed_item.gold_value
-            sold_count += 1
+    for idx, (inv_idx, item) in enumerate(matching_items):
+        if remaining_to_sell <= 0:
+            break
 
-    player.add_gold(total_gold)
-    print(f"✓ Sold {sold_count}x {item_name} for {total_gold}{game.currency_symbol}!")
+        if item.quantity <= remaining_to_sell:
+            # Sell entire stack
+            total_gold += item.gold_value
+            remaining_to_sell -= item.quantity
+            items_to_remove.append(inv_idx)
+        else:
+            # Sell partial stack
+            value_per_unit = item.gold_value / item.quantity
+            gold_from_partial = value_per_unit * remaining_to_sell
+            total_gold += gold_from_partial
+            item.quantity -= remaining_to_sell
+            item.gold_value -= gold_from_partial
+            remaining_to_sell = 0
+
+    # Remove sold stacks (in reverse order to maintain indices)
+    for inv_idx in sorted(items_to_remove, reverse=True):
+        player.inventory.pop(inv_idx)
+
+    player.add_gold(int(total_gold))
+    print(f"✓ Sold {count}x {item_name} for {int(total_gold)}{game.currency_symbol}!")
     print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
 
 
@@ -1204,12 +1286,13 @@ def quick_craft(game, args):
     # Craft items
     crafted_count = 0
     for _ in range(count):
-        # Check ingredients
-        player_item_names = [item.name for item in player.inventory]
+        # Check ingredients (considering stacks)
         missing_ingredients = []
 
         for ingredient in recipe.ingredients:
-            if ingredient not in player_item_names:
+            # Count total quantity of this ingredient across all stacks
+            total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
+            if total_quantity < 1:
                 missing_ingredients.append(ingredient)
 
         if missing_ingredients:
@@ -1219,12 +1302,9 @@ def quick_craft(game, args):
                 print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
             break
 
-        # Remove ingredients
+        # Remove ingredients (consumes from stacks)
         for ingredient in recipe.ingredients:
-            for i, item in enumerate(player.inventory):
-                if item.name == ingredient:
-                    player.remove_item(i)
-                    break
+            player.consume_item_by_name(ingredient, 1)
 
         # Create crafted item
         crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
@@ -2476,12 +2556,13 @@ def manage_crafting(game):
                 print("Type 'done' to stop crafting, or it will auto-stop when out of ingredients")
 
                 while True:
-                    # Check if player has all ingredients
-                    player_item_names = [item.name for item in player.inventory]
+                    # Check if player has all ingredients (considering stacks)
                     missing_ingredients = []
 
                     for ingredient in recipe.ingredients:
-                        if ingredient not in player_item_names:
+                        # Count total quantity of this ingredient across all stacks
+                        total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
+                        if total_quantity < 1:
                             missing_ingredients.append(ingredient)
 
                     if missing_ingredients:
@@ -2491,12 +2572,9 @@ def manage_crafting(game):
                             print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
                         break
 
-                    # Remove ingredients from inventory
+                    # Remove ingredients from inventory (consumes from stacks)
                     for ingredient in recipe.ingredients:
-                        for i, item in enumerate(player.inventory):
-                            if item.name == ingredient:
-                                player.remove_item(i)
-                                break
+                        player.consume_item_by_name(ingredient, 1)
 
                     # Create and add crafted item
                     crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
