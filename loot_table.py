@@ -3132,15 +3132,20 @@ def manage_crafting(game):
 
                 recipe = CraftingRecipe(output_name, output_type, output_gold)
 
-                print("\nAdd ingredients (enter item names from loot table)")
-                print("Available items from all tables:")
-                # Show items from all tables
-                all_item_names = set()
-                for table in game.loot_tables:
-                    for item in table.items:
-                        all_item_names.add(item.name)
-                for item_name in sorted(all_item_names):
-                    print(f"  - {item_name}")
+                print("\nAdd ingredients (enter item names)")
+                print("\nAvailable from Master Items:")
+                if game.master_items:
+                    for master_item in sorted(game.master_items, key=lambda x: x.name):
+                        print(f"  - {master_item.name} ({master_item.item_type})")
+                else:
+                    print("  (No master items)")
+
+                print("\nAvailable from Crafting Recipes:")
+                if game.crafting_recipes:
+                    for recipe_item in sorted(game.crafting_recipes, key=lambda x: x.output_name):
+                        print(f"  - {recipe_item.output_name} ({recipe_item.output_type})")
+                else:
+                    print("  (No recipes yet)")
 
                 print("\nType 'done' when finished adding ingredients")
                 while True:
