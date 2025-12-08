@@ -3199,7 +3199,8 @@ def admin_menu(game):
                     continue
 
                 item = all_items[index]
-                player.add_item(item)
+                item_copy = copy.deepcopy(item)
+                player.add_item(item_copy)
                 print(f"✓ Gifted {item} to {player.name}")
             except ValueError:
                 print("Invalid input!")
