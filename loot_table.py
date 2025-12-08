@@ -805,10 +805,15 @@ def show_quick_commands_help(game):
     print("💰 SELLING:")
     print("  sell <index> [player]")
     print("  sell all [player]")
+    print("  sell all <itemname> [player]")
+    print("  sell <itemname> <count> [player]")
     print("    Examples:")
-    print("      sell 0       - Sell item at index 0 for current player")
-    print("      sell 0 bob   - Sell item 0 for bob")
-    print("      sell all     - Sell all items for current player")
+    print("      sell 0            - Sell item at index 0 for current player")
+    print("      sell 0 bob        - Sell item 0 for bob")
+    print("      sell all          - Sell all items for current player")
+    print("      sell all sword    - Sell all swords for current player")
+    print("      sell sword 5      - Sell 5 swords for current player")
+    print("      sell sword 3 bob  - Sell 3 swords for bob")
     print()
     print("🔨 CRAFTING:")
     print("  craft <recipe_name> [count] [player]")
@@ -993,17 +998,121 @@ def quick_draw(game, args):
 
 
 def quick_sell(game, args):
-    """Quick sell command: sell <index|all> [player]"""
+    """Quick sell command: sell <index|all|itemname> [count] [player]"""
     if not args:
-        print("Usage: sell <index|all> [player]")
+        print("Usage: sell <index|all|all itemname|itemname count> [player]")
         return
 
-    # Determine player
-    player_name = None
-    if len(args) >= 2:
-        player_name = args[1]
-    else:
-        player_name = game.current_player_name
+    # Parse command variants
+    # Variant 1: sell all [itemname] [player]
+    if args[0].lower() == "all":
+        player_name = None
+        item_name = None
+
+        if len(args) == 1:
+            # sell all - sell all items for current player
+            player_name = game.current_player_name
+        elif len(args) == 2:
+            # sell all X - could be "sell all bob" (player) or "sell all sword" (item name)
+            # Check if args[1] is a player
+            if game.get_player(args[1]):
+                player_name = args[1]
+            else:
+                # It's an item name
+                player_name = game.current_player_name
+                item_name = args[1]
+        elif len(args) >= 3:
+            # sell all sword bob
+            item_name = args[1]
+            player_name = args[2]
+
+        if not player_name:
+            print("Error: No player specified and no current player set")
+            return
+
+        player = game.get_player(player_name)
+        if not player:
+            print(f"Error: Player '{player_name}' not found")
+            return
+
+        if not player.inventory:
+            print(f"{player.name} has no items to sell!")
+            return
+
+        # Sell all or sell all matching item name
+        if item_name:
+            # Sell all items matching the name
+            items_to_sell = [item for item in player.inventory if item.name.lower() == item_name.lower()]
+            if not items_to_sell:
+                print(f"Error: No items named '{item_name}' found in inventory")
+                return
+
+            total_gold = sum(item.gold_value for item in items_to_sell)
+            count = len(items_to_sell)
+
+            # Remove items from inventory
+            player.inventory = [item for item in player.inventory if item.name.lower() != item_name.lower()]
+            player.add_gold(total_gold)
+
+            print(f"✓ Sold {count}x {item_name} for {total_gold}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        else:
+            # Sell all items
+            total_gold = sum(item.gold_value for item in player.inventory)
+            item_count = len(player.inventory)
+            player.inventory.clear()
+            player.add_gold(total_gold)
+            print(f"✓ Sold all {item_count} items for {total_gold}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        return
+
+    # Variant 2: sell <index> [player] - sell by index
+    try:
+        index = int(args[0])
+
+        # Determine player
+        player_name = args[1] if len(args) >= 2 else game.current_player_name
+
+        if not player_name:
+            print("Error: No player specified and no current player set")
+            return
+
+        player = game.get_player(player_name)
+        if not player:
+            print(f"Error: Player '{player_name}' not found")
+            return
+
+        if not player.inventory:
+            print(f"{player.name} has no items to sell!")
+            return
+
+        if index < 0 or index >= len(player.inventory):
+            print(f"Error: Invalid item index. Player has {len(player.inventory)} items (0-{len(player.inventory)-1})")
+            return
+
+        item = player.remove_item(index)
+        if item:
+            player.add_gold(item.gold_value)
+            print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+        return
+    except ValueError:
+        pass  # Not a number, continue to item name logic
+
+    # Variant 3: sell <itemname> <count> [player]
+    item_name = args[0]
+
+    if len(args) < 2:
+        print("Usage: sell <itemname> <count> [player]")
+        return
+
+    try:
+        count = int(args[1])
+    except ValueError:
+        print("Error: count must be a number")
+        return
+
+    player_name = args[2] if len(args) >= 3 else game.current_player_name
 
     if not player_name:
         print("Error: No player specified and no current player set")
@@ -1018,32 +1127,33 @@ def quick_sell(game, args):
         print(f"{player.name} has no items to sell!")
         return
 
-    # Check if selling all
-    if args[0].lower() == "all":
-        total_gold = sum(item.gold_value for item in player.inventory)
-        item_count = len(player.inventory)
-        player.inventory.clear()
-        player.add_gold(total_gold)
-        print(f"✓ Sold all {item_count} items for {total_gold}{game.currency_symbol}!")
-        print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+    # Find matching items
+    matching_items = [(i, item) for i, item in enumerate(player.inventory) if item.name.lower() == item_name.lower()]
+
+    if not matching_items:
+        print(f"Error: No items named '{item_name}' found in inventory")
         return
 
-    # Sell specific item
-    try:
-        index = int(args[0])
-    except ValueError:
-        print("Error: index must be a number or 'all'")
+    if len(matching_items) < count:
+        print(f"Error: Player only has {len(matching_items)}x {item_name}, cannot sell {count}")
         return
 
-    if index < 0 or index >= len(player.inventory):
-        print(f"Error: Invalid item index. Player has {len(player.inventory)} items (0-{len(player.inventory)-1})")
-        return
+    # Sell the requested count
+    total_gold = 0
+    sold_count = 0
 
-    item = player.remove_item(index)
-    if item:
-        player.add_gold(item.gold_value)
-        print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
-        print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
+    for i in range(count):
+        idx, item = matching_items[i]
+        # Adjust index as we remove items
+        adjusted_idx = idx - sold_count
+        removed_item = player.remove_item(adjusted_idx)
+        if removed_item:
+            total_gold += removed_item.gold_value
+            sold_count += 1
+
+    player.add_gold(total_gold)
+    print(f"✓ Sold {sold_count}x {item_name} for {total_gold}{game.currency_symbol}!")
+    print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
 
 
 def quick_craft(game, args):
