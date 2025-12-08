@@ -1361,14 +1361,19 @@ def quick_craft(game, args):
     # Craft items
     crafted_count = 0
     for _ in range(count):
-        # Check ingredients (considering stacks)
+        # Count required quantities for each ingredient
+        required_ingredients = {}
+        for ingredient in recipe.ingredients:
+            required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
+
+        # Check if player has all ingredients in required quantities
         missing_ingredients = []
 
-        for ingredient in recipe.ingredients:
+        for ingredient, required_count in required_ingredients.items():
             # Count total quantity of this ingredient across all stacks
             total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
-            if total_quantity < 1:
-                missing_ingredients.append(ingredient)
+            if total_quantity < required_count:
+                missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
 
         if missing_ingredients:
             if crafted_count > 0:
@@ -2798,14 +2803,19 @@ def manage_crafting(game):
                 print("Type 'done' to stop crafting, or it will auto-stop when out of ingredients")
 
                 while True:
-                    # Check if player has all ingredients (considering stacks)
+                    # Count required quantities for each ingredient
+                    required_ingredients = {}
+                    for ingredient in recipe.ingredients:
+                        required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
+
+                    # Check if player has all ingredients in required quantities
                     missing_ingredients = []
 
-                    for ingredient in recipe.ingredients:
+                    for ingredient, required_count in required_ingredients.items():
                         # Count total quantity of this ingredient across all stacks
                         total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
-                        if total_quantity < 1:
-                            missing_ingredients.append(ingredient)
+                        if total_quantity < required_count:
+                            missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
 
                     if missing_ingredients:
                         if crafted_count > 0:
