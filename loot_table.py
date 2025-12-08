@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import sys
+import copy
 
 
 class MasterItem:
@@ -435,13 +436,15 @@ class LootTable:
         if not self.items:
             return None
         weights = [item.weight for item in self.items]
-        return random.choices(self.items, weights=weights, k=1)[0]
+        drawn_item = random.choices(self.items, weights=weights, k=1)[0]
+        return copy.deepcopy(drawn_item)
 
     def draw_multiple(self, count):
         if not self.items:
             return []
         weights = [item.weight for item in self.items]
-        return random.choices(self.items, weights=weights, k=count)
+        drawn_items = random.choices(self.items, weights=weights, k=count)
+        return [copy.deepcopy(item) for item in drawn_items]
 
 
 class GameSystem:
