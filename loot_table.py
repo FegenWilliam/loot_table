@@ -1652,15 +1652,16 @@ def show_main_menu():
     print("LOOT TABLE SYSTEM")
     print("=" * 40)
     print("0. Quick Commands")
-    print("1. Manage Loot Table")
-    print("2. Manage Players")
-    print("3. Draw Items")
-    print("4. Sell Items")
-    print("5. Crafting Menu")
-    print("6. Equipment & Upgrades")
-    print("7. Admin Menu")
-    print("8. Save Game")
-    print("9. Exit")
+    print("1. Quick Turn")
+    print("2. Manage Loot Table")
+    print("3. Manage Players")
+    print("4. Draw Items")
+    print("5. Sell Items")
+    print("6. Crafting Menu")
+    print("7. Equipment & Upgrades")
+    print("8. Admin Menu")
+    print("9. Save Game")
+    print("10. Exit")
     print("=" * 40)
 
 
@@ -2687,6 +2688,351 @@ def sell_items_menu(game):
             print("Invalid input! Enter a number or 'back'")
 
 
+def quick_turn_menu(game):
+    """Execute a quick turn: draw, show results, craft, sell for all players."""
+    if not game.loot_tables:
+        print("No loot tables exist! Create one first.")
+        return
+
+    if not game.players:
+        print("No players exist! Add players first.")
+        return
+
+    print("\n" + "=" * 60)
+    print("QUICK TURN MODE")
+    print("=" * 60)
+
+    # Phase 1: Draw phase
+    print("\n📦 PHASE 1: DRAWING")
+    print("-" * 60)
+
+    # Get number of draws per player
+    try:
+        draws_per_player = int(input("How many draws per player? ").strip())
+        if draws_per_player <= 0:
+            print("Number of draws must be greater than 0!")
+            return
+    except ValueError:
+        print("Invalid input!")
+        return
+
+    # Iterate through all players for drawing
+    for player_name, player in game.players.items():
+        print(f"\n--- {player_name}'s Turn to Draw ---")
+        print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
+
+        # Show available tables
+        print("\nAvailable loot tables:")
+        for i, table in enumerate(game.loot_tables):
+            print(f"  {i}. {table.name} (Cost: {table.draw_cost}{game.currency_symbol} per draw, Items: {len(table.items)})")
+
+        try:
+            table_index = int(input(f"\n{player_name}, select table number: ").strip())
+            if table_index < 0 or table_index >= len(game.loot_tables):
+                print("Invalid table number! Skipping this player.")
+                continue
+
+            selected_table = game.loot_tables[table_index]
+
+            if not selected_table.items:
+                print(f"Table '{selected_table.name}' has no items! Skipping this player.")
+                continue
+
+            # Calculate actual draw cost with reductions
+            base_cost = selected_table.draw_cost
+            actual_cost = player.calculate_draw_cost(base_cost)
+            total_cost = draws_per_player * actual_cost
+
+            # Check if player has enough currency
+            if player.gold < total_cost:
+                print(f"❌ Not enough {game.currency_name}! Need {total_cost}{game.currency_symbol} but {player.name} only has {player.gold}{game.currency_symbol}")
+                print("Skipping this player.")
+                continue
+
+            # Deduct cost
+            player.remove_gold(total_cost)
+
+            # Draw items
+            items = selected_table.draw_multiple(draws_per_player)
+            print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({draws_per_player} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
+            print(f"🎲 {player.name} drew {draws_per_player} items:")
+
+            # Get double quantity chance
+            double_chance = player.get_double_quantity_chance()
+
+            # Get sell price increase for non-crafted items
+            flat_price, percent_price = player.get_sell_price_increase()
+
+            total_value = 0
+            doubled_count = 0
+            price_boosted_count = 0
+
+            for i, item in enumerate(items, 1):
+                # Roll rarity for Equipment items
+                if item.item_type.lower() == "equipment" and not item.rarity:
+                    item.rarity = game.rarity_system.roll_rarity()
+
+                # Apply sell price increase to non-crafted items
+                price_boosted = False
+                if flat_price > 0 or percent_price > 0:
+                    original_value = item.gold_value
+                    item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+                    if item.gold_value > original_value:
+                        price_boosted_count += 1
+                        price_boosted = True
+
+                # Check if we should double the quantity
+                doubled = False
+                if double_chance > 0 and random.random() * 100 < double_chance:
+                    item.quantity *= 2
+                    item.gold_value *= 2
+                    doubled_count += 1
+                    doubled = True
+
+                # Display item with indicators
+                indicators = []
+                if doubled:
+                    indicators.append("✨ DOUBLED!")
+                if price_boosted:
+                    indicators.append("💰 PRICE BOOST!")
+
+                if indicators:
+                    print(f"  {i}. {item} {' '.join(indicators)}")
+                else:
+                    print(f"  {i}. {item}")
+
+                player.add_item(item)
+                total_value += item.gold_value
+
+            if doubled_count > 0:
+                print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+
+            if price_boosted_count > 0:
+                print(f"💰 {price_boosted_count} item(s) had their value increased! (+{flat_price} flat, +{percent_price}%)")
+
+            net_value = total_value - total_cost
+            print(f"\nTotal value: {total_value}{game.currency_symbol}")
+            print(f"Net gain/loss: {net_value:+d}{game.currency_symbol}")
+            print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol} | Inventory: {len(player.inventory)} items")
+
+        except ValueError:
+            print("Invalid input! Skipping this player.")
+            continue
+
+    # Phase 2: Show all inventories
+    print("\n" + "=" * 60)
+    print("📋 PHASE 2: INVENTORY SUMMARY")
+    print("=" * 60)
+
+    for player_name, player in game.players.items():
+        print(f"\n--- {player_name} ---")
+        print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol} | Items: {len(player.inventory)}")
+
+        if player.inventory:
+            # Group items by name for compact display
+            item_groups = {}
+            for item in player.inventory:
+                key = item.name
+                if key not in item_groups:
+                    item_groups[key] = []
+                item_groups[key].append(item)
+
+            print("Items:")
+            for item_name, items in sorted(item_groups.items()):
+                total_quantity = sum(item.quantity for item in items)
+                total_value = sum(item.gold_value for item in items)
+                count = len(items)
+                if count == 1 and items[0].quantity == 1:
+                    print(f"  • {items[0]}")
+                else:
+                    print(f"  • {item_name} x{total_quantity} ({count} stack(s), {total_value}{game.currency_symbol} total)")
+        else:
+            print("  (No items)")
+
+    # Phase 3: Crafting phase
+    print("\n" + "=" * 60)
+    print("🔨 PHASE 3: CRAFTING")
+    print("=" * 60)
+
+    if not game.crafting_recipes:
+        print("No crafting recipes available. Skipping crafting phase.")
+    else:
+        for player_name, player in game.players.items():
+            print(f"\n--- {player_name}'s Crafting Turn ---")
+
+            if not player.inventory:
+                print(f"{player_name} has no items to craft with. Skipping.")
+                continue
+
+            while True:
+                craft_choice = input(f"\n{player_name}, craft an item? (y/n or 'done'): ").strip().lower()
+
+                if craft_choice in ['n', 'done']:
+                    break
+
+                if craft_choice != 'y':
+                    print("Please enter 'y', 'n', or 'done'")
+                    continue
+
+                # Show available recipes
+                print("\nAvailable recipes:")
+                for i, recipe in enumerate(game.crafting_recipes):
+                    print(f"  {i}. {recipe}")
+
+                try:
+                    recipe_index = int(input("\nEnter recipe number to craft (or -1 to skip): ").strip())
+                    if recipe_index == -1:
+                        break
+
+                    if recipe_index < 0 or recipe_index >= len(game.crafting_recipes):
+                        print("Invalid recipe number!")
+                        continue
+
+                    recipe = game.crafting_recipes[recipe_index]
+
+                    # Count required quantities for each ingredient
+                    required_ingredients = {}
+                    for ingredient in recipe.ingredients:
+                        required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
+
+                    # Check if player has all ingredients in required quantities
+                    missing_ingredients = []
+                    for ingredient, required_count in required_ingredients.items():
+                        total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
+                        if total_quantity < required_count:
+                            missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
+
+                    if missing_ingredients:
+                        print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
+                        continue
+
+                    # Remove ingredients from inventory
+                    for ingredient in recipe.ingredients:
+                        player.consume_item_by_name(ingredient, 1)
+
+                    # Create and add crafted item
+                    crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
+
+                    # If Equipment or Upgrade, allow player to roll for effects
+                    if recipe.output_type.lower() in ["equipment", "upgrade"]:
+                        if not game.effect_templates:
+                            print(f"\n⚠️  No effect templates available! Item crafted without effects.")
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                print(f"✓ Crafted [{rarity}] {recipe.output_name} (0 effects)")
+                            else:
+                                print(f"✓ Crafted {recipe.output_name} (0 effects)")
+                        else:
+                            # For Equipment, roll rarity first
+                            max_effects = None
+                            if recipe.output_type.lower() == "equipment":
+                                rarity = game.rarity_system.roll_rarity()
+                                crafted_item.rarity = rarity
+                                max_effects = game.rarity_system.get_max_effects(rarity)
+                                print(f"\n✨ Rolled [{rarity}] {recipe.output_name}! (Max {max_effects} effects)")
+                            else:
+                                print(f"\n✓ Crafted {recipe.output_name}!")
+
+                            # Roll for effects
+                            print(f"\nRoll for effects? Cost: {game.effect_cost}{game.currency_symbol} per roll")
+                            print(f"Your {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+                            effects_added = 0
+                            while True:
+                                # Check if Equipment has reached max effects
+                                if max_effects and effects_added >= max_effects:
+                                    print(f"\n✓ Reached maximum effects for {rarity} rarity ({max_effects})!")
+                                    break
+
+                                roll_choice = input(f"\nRoll for effect #{effects_added + 1}? (y/n): ").strip().lower()
+                                if roll_choice != 'y':
+                                    break
+
+                                # Check if player has enough currency
+                                if player.gold < game.effect_cost:
+                                    print(f"❌ Not enough {game.currency_name}! Need {game.effect_cost}{game.currency_symbol}, have {player.gold}{game.currency_symbol}")
+                                    break
+
+                                # Deduct cost and roll for effect
+                                player.remove_gold(game.effect_cost)
+                                weights = [tmpl.weight for tmpl in game.effect_templates]
+                                rolled_template = random.choices(game.effect_templates, weights=weights, k=1)[0]
+                                effect = rolled_template.create_effect()
+                                crafted_item.add_effect(effect)
+                                effects_added += 1
+
+                                print(f"🎲 Rolled: {rolled_template.name}")
+                                print(f"   Effect: {effect}")
+                                print(f"   {game.currency_name}: {player.gold}{game.currency_symbol}")
+
+                            print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
+                    else:
+                        print(f"✓ Crafted {recipe.output_name}!")
+
+                    # Apply crafted sell price increase
+                    flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
+                    if flat_craft_price > 0 or percent_craft_price > 0:
+                        original_craft_value = crafted_item.gold_value
+                        crafted_item.gold_value = player.calculate_item_value(original_craft_value, is_crafted=True)
+                        if crafted_item.gold_value > original_craft_value:
+                            print(f"💰 Crafted item value increased: {original_craft_value}{game.currency_symbol} → {crafted_item.gold_value}{game.currency_symbol} (+{flat_craft_price} flat, +{percent_craft_price}%)")
+
+                    player.add_item(crafted_item)
+                    print(f"\nAdded to inventory: {crafted_item}")
+
+                except ValueError:
+                    print("Invalid input!")
+                    continue
+
+    # Phase 4: Selling phase
+    print("\n" + "=" * 60)
+    print("💰 PHASE 4: SELLING")
+    print("=" * 60)
+
+    for player_name, player in game.players.items():
+        print(f"\n--- {player_name}'s Selling Turn ---")
+
+        if not player.inventory:
+            print(f"{player_name} has no items to sell. Skipping.")
+            continue
+
+        while True:
+            print(f"\n{player_name}'s Inventory:")
+            print(f"{game.currency_name.capitalize()}: {player.gold}{game.currency_symbol}")
+            print("Items:")
+            for i, item in enumerate(player.inventory):
+                print(f"  {i}. {item}")
+
+            sell_choice = input(f"\n{player_name}, enter item number to sell (or 'done' to finish): ").strip().lower()
+
+            if sell_choice == 'done':
+                break
+
+            try:
+                index = int(sell_choice)
+                if index < 0 or index >= len(player.inventory):
+                    print("Invalid item number!")
+                    continue
+
+                item = player.inventory[index]
+                player.remove_item(index)
+                player.add_gold(item.gold_value)
+                print(f"✓ Sold {item.name} for {item.gold_value}{game.currency_symbol}!")
+                print(f"New {game.currency_name} balance: {player.gold}{game.currency_symbol}")
+
+                if not player.inventory:
+                    print(f"\n{player.name} has sold all items!")
+                    break
+
+            except ValueError:
+                print("Invalid input! Enter a number or 'done'")
+
+    print("\n" + "=" * 60)
+    print("✅ QUICK TURN COMPLETE!")
+    print("=" * 60)
+
+
 def manage_crafting(game):
     while True:
         show_crafting_menu()
@@ -3333,30 +3679,32 @@ if __name__ == "__main__":
     while True:
         show_context_header(game)
         show_main_menu()
-        choice = input("Enter your choice (0-9): ").strip()
+        choice = input("Enter your choice (0-10): ").strip()
 
         if choice == "0":
             quick_commands_menu(game)
         elif choice == "1":
-            manage_loot_table(game)
+            quick_turn_menu(game)
         elif choice == "2":
-            manage_players(game)
+            manage_loot_table(game)
         elif choice == "3":
-            draw_items_menu(game)
+            manage_players(game)
         elif choice == "4":
-            sell_items_menu(game)
+            draw_items_menu(game)
         elif choice == "5":
-            manage_crafting(game)
+            sell_items_menu(game)
         elif choice == "6":
-            manage_equipment_upgrades(game)
+            manage_crafting(game)
         elif choice == "7":
-            admin_menu(game)
+            manage_equipment_upgrades(game)
         elif choice == "8":
+            admin_menu(game)
+        elif choice == "9":
             if game.save_game():
                 print("✓ Game saved successfully!")
             else:
                 print("Failed to save game.")
-        elif choice == "9":
+        elif choice == "10":
             print("\nAre you sure you want to exit?")
             save_prompt = input("Save before exiting? (y/n/cancel): ").strip().lower()
 
@@ -3372,4 +3720,4 @@ if __name__ == "__main__":
             break
         else:
 
-            print("Invalid choice! Please enter 0-9.")
+            print("Invalid choice! Please enter 0-10.")
