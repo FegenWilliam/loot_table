@@ -710,7 +710,8 @@ class GameSystem:
                                 ]
                             }
                             for item in player.consumed_upgrades
-                        ]
+                        ],
+                        'active_consumable_effects': player.active_consumable_effects
                     }
                     for name, player in self.players.items()
                 },
@@ -764,6 +765,15 @@ class GameSystem:
                         'purchase_price': item.purchase_price
                     }
                     for item in self.shop_items
+                ],
+                'consumables': [
+                    {
+                        'name': cons.name,
+                        'effect_type': cons.effect_type,
+                        'effect_value': cons.effect_value,
+                        'gold_value': cons.gold_value
+                    }
+                    for cons in self.consumables
                 ],
                 'currency_name': self.currency_name,
                 'currency_symbol': self.currency_symbol,
@@ -936,6 +946,9 @@ class GameSystem:
                         item.add_effect(eff)
                     player.consume_upgrade(item)
 
+                # Load active consumable effects
+                player.active_consumable_effects = player_data.get('active_consumable_effects', [])
+
                 self.players[name] = player
 
             # Load crafting recipes
@@ -1014,6 +1027,17 @@ class GameSystem:
                     shop_item_data['purchase_price']
                 )
                 self.shop_items.append(shop_item)
+
+            # Load consumables
+            self.consumables = []
+            for cons_data in data.get('consumables', []):
+                consumable = Consumable(
+                    cons_data['name'],
+                    cons_data['effect_type'],
+                    cons_data.get('effect_value'),
+                    cons_data.get('gold_value', 0)
+                )
+                self.consumables.append(consumable)
 
             # Load currency settings
             self.currency_name = data.get('currency_name', 'gold')
@@ -1962,7 +1986,8 @@ def show_player_menu():
     print("3. View player info")
     print("4. View all players")
     print("5. Set current player")
-    print("6. Back to main menu")
+    print("6. Use consumable")
+    print("7. Back to main menu")
 
 
 def show_admin_menu(currency_name="gold"):
@@ -2782,6 +2807,76 @@ def manage_players(game):
                 print(f"Player '{player_name}' not found!")
 
         elif choice == "6":
+            # Use consumable
+            if not game.players:
+                print("No players exist!")
+                continue
+
+            print("\nAvailable players:")
+            for name, player in game.players.items():
+                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
+                print(f"  - {name}{current_marker}")
+
+            player_name = get_player_name_input(game)
+            player = game.get_player(player_name)
+
+            if not player:
+                print(f"Player '{player_name}' not found!")
+                continue
+
+            # Find consumables in inventory
+            consumable_items = [(i, item) for i, item in enumerate(player.inventory) if item.item_type == "consumable"]
+
+            if not consumable_items:
+                print(f"{player.name} has no consumables!")
+                continue
+
+            print(f"\n{player.name}'s Consumables:")
+            for idx, (inv_idx, item) in enumerate(consumable_items):
+                print(f"  {idx}. {item}")
+
+            try:
+                choice_idx = int(input("\nEnter consumable number to use: ").strip())
+                if choice_idx < 0 or choice_idx >= len(consumable_items):
+                    print("Invalid consumable number!")
+                    continue
+
+                inv_idx, consumable_item = consumable_items[choice_idx]
+
+                # Find the consumable definition
+                matching_consumable = None
+                for cons in game.consumables:
+                    if cons.name == consumable_item.name:
+                        matching_consumable = cons
+                        break
+
+                if not matching_consumable:
+                    print(f"Warning: Consumable '{consumable_item.name}' not found in definitions! Using as-is.")
+                    # Still allow consumption if it's in inventory even if not in definitions
+                    effect_type = "double_next_draw"  # Default for now
+                else:
+                    effect_type = matching_consumable.effect_type
+
+                # Remove from inventory
+                player.remove_item(inv_idx)
+
+                # Add effect to active effects
+                player.active_consumable_effects.append({
+                    'effect_type': effect_type,
+                    'name': consumable_item.name
+                })
+
+                print(f"\n✨ {player.name} used {consumable_item.name}!")
+                if effect_type == "double_next_draw":
+                    print("   Effect: Next draw will have DOUBLED quantity (guaranteed)!")
+                print(f"\nActive effects: {len(player.active_consumable_effects)}")
+                for eff in player.active_consumable_effects:
+                    print(f"  - {eff['name']} ({eff['effect_type']})")
+
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "7":
             break
 
 
@@ -2849,6 +2944,14 @@ def draw_items_menu(game):
         print(f"\n💰 Paid {total_cost}{game.currency_symbol} ({count} x {actual_cost}{game.currency_symbol}) to {selected_table.name}")
         print(f"🎲 {player.name} drew {count} items:")
 
+        # Check for active consumable effects
+        has_double_next_draw = False
+        for effect in player.active_consumable_effects:
+            if effect['effect_type'] == 'double_next_draw':
+                has_double_next_draw = True
+                print(f"🔥 CONSUMABLE EFFECT ACTIVE: {effect['name']} - All items will be DOUBLED!")
+                break
+
         # Get double quantity chance
         double_chance = player.get_double_quantity_chance()
 
@@ -2858,6 +2961,7 @@ def draw_items_menu(game):
         total_value = 0
         doubled_count = 0
         price_boosted_count = 0
+        consumable_doubled_count = 0
 
         for i, item in enumerate(items, 1):
             # Roll rarity for Equipment items
@@ -2875,7 +2979,16 @@ def draw_items_menu(game):
 
             # Check if we should double the quantity
             doubled = False
-            if double_chance > 0 and random.random() * 100 < double_chance:
+            consumable_doubled = False
+
+            # Apply consumable effect (guaranteed double)
+            if has_double_next_draw:
+                item.quantity *= 2
+                item.gold_value *= 2
+                consumable_doubled_count += 1
+                consumable_doubled = True
+            # Otherwise check for chance-based double
+            elif double_chance > 0 and random.random() * 100 < double_chance:
                 item.quantity *= 2
                 item.gold_value *= 2
                 doubled_count += 1
@@ -2883,7 +2996,9 @@ def draw_items_menu(game):
 
             # Display item with indicators
             indicators = []
-            if doubled:
+            if consumable_doubled:
+                indicators.append("🔥 CONSUMABLE DOUBLED!")
+            elif doubled:
                 indicators.append("✨ DOUBLED!")
             if price_boosted:
                 indicators.append("💰 PRICE BOOST!")
@@ -2895,6 +3010,11 @@ def draw_items_menu(game):
 
             player.add_item(item)
             total_value += item.gold_value
+
+        # Remove consumable effect after use
+        if has_double_next_draw:
+            player.active_consumable_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] != 'double_next_draw']
+            print(f"\n🔥 Consumable effect used! {consumable_doubled_count} item(s) DOUBLED from consumable!")
 
         if doubled_count > 0:
             print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
