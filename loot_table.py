@@ -241,6 +241,11 @@ class Consumable:
     def __str__(self):
         if self.effect_type == "double_next_draw":
             return f"{self.name} (consumable, {self.gold_value}g) - Doubles quantity on next draw"
+        elif self.effect_type == "free_draw_ticket":
+            draws = self.effect_value if self.effect_value else 1
+            return f"{self.name} (consumable, {self.gold_value}g) - Draw {draws} item(s) for free from selected table"
+        elif self.effect_type == "trash_to_treasure":
+            return f"{self.name} (consumable, {self.gold_value}g) - Next draw excludes highest weight item"
         return f"{self.name} (consumable, {self.gold_value}g) - {self.effect_type}"
 
     def __repr__(self):
@@ -1436,10 +1441,30 @@ def manage_consumables(game):
 
             print("\nAvailable effect types:")
             print("  1. double_next_draw - Doubles quantity on next draw (guaranteed)")
-            effect_choice = input("Choose effect type (1): ").strip()
+            print("  2. free_draw_ticket - Draw X items for free from selected table")
+            print("  3. trash_to_treasure - Next draw excludes highest weight item")
+            effect_choice = input("Choose effect type (1-3): ").strip()
+
+            effect_type = None
+            effect_value = None
 
             if effect_choice == "1":
                 effect_type = "double_next_draw"
+                effect_value = None
+            elif effect_choice == "2":
+                effect_type = "free_draw_ticket"
+                try:
+                    draws = int(input("Enter number of free draws: ").strip())
+                    if draws <= 0:
+                        print("Number of draws must be greater than 0!")
+                        continue
+                    effect_value = draws
+                except ValueError:
+                    print("Invalid number!")
+                    continue
+            elif effect_choice == "3":
+                effect_type = "trash_to_treasure"
+                effect_value = None
             else:
                 print("Invalid effect type!")
                 continue
@@ -1450,7 +1475,7 @@ def manage_consumables(game):
                     print("Value cannot be negative!")
                     continue
 
-                consumable = Consumable(name, effect_type, None, gold_value)
+                consumable = Consumable(name, effect_type, effect_value, gold_value)
                 game.consumables.append(consumable)
                 print(f"✓ Added consumable: {consumable}")
             except ValueError:
@@ -1921,24 +1946,62 @@ def manage_players(game):
                     print(f"Warning: Consumable '{consumable_item.name}' not found in definitions! Using as-is.")
                     # Still allow consumption if it's in inventory even if not in definitions
                     effect_type = "double_next_draw"  # Default for now
+                    effect_value = None
                 else:
                     effect_type = matching_consumable.effect_type
+                    effect_value = matching_consumable.effect_value
+
+                # Handle special setup for ticket effect
+                table_name = None
+                if effect_type == "free_draw_ticket":
+                    if not game.loot_tables:
+                        print("❌ No loot tables available! Cannot use ticket.")
+                        continue
+
+                    print("\nAvailable loot tables:")
+                    for i, table in enumerate(game.loot_tables):
+                        print(f"  {i}. {table.name}")
+
+                    try:
+                        table_idx = int(input("Select table to draw from: ").strip())
+                        if table_idx < 0 or table_idx >= len(game.loot_tables):
+                            print("Invalid table number!")
+                            continue
+                        table_name = game.loot_tables[table_idx].name
+                    except ValueError:
+                        print("Invalid input!")
+                        continue
 
                 # Remove from inventory
                 player.remove_item(inv_idx)
 
-                # Add effect to active effects
-                player.active_consumable_effects.append({
+                # Add effect to active effects with additional data
+                effect_data = {
                     'effect_type': effect_type,
                     'name': consumable_item.name
-                })
+                }
+
+                if effect_type == "free_draw_ticket":
+                    effect_data['table_name'] = table_name
+                    effect_data['draws'] = effect_value if effect_value else 1
+
+                player.active_consumable_effects.append(effect_data)
 
                 print(f"\n✨ {player.name} used {consumable_item.name}!")
                 if effect_type == "double_next_draw":
                     print("   Effect: Next draw will have DOUBLED quantity (guaranteed)!")
+                elif effect_type == "free_draw_ticket":
+                    draws = effect_value if effect_value else 1
+                    print(f"   Effect: Draw {draws} item(s) for FREE from {table_name}!")
+                elif effect_type == "trash_to_treasure":
+                    print("   Effect: Next draw will exclude the highest weight item!")
+
                 print(f"\nActive effects: {len(player.active_consumable_effects)}")
                 for eff in player.active_consumable_effects:
-                    print(f"  - {eff['name']} ({eff['effect_type']})")
+                    if eff['effect_type'] == 'free_draw_ticket':
+                        print(f"  - {eff['name']} ({eff['draws']} draw(s) from {eff['table_name']})")
+                    else:
+                        print(f"  - {eff['name']} ({eff['effect_type']})")
 
             except ValueError:
                 print("Invalid input!")
@@ -1955,6 +2018,83 @@ def draw_items_menu(game):
     if not game.players:
         print("No players exist! Add players first.")
         return
+
+    # Check for and process free draw tickets first
+    for player_name, player in game.players.items():
+        ticket_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] == 'free_draw_ticket']
+
+        for ticket_effect in ticket_effects:
+            table_name = ticket_effect.get('table_name')
+            draws = ticket_effect.get('draws', 1)
+
+            # Find the table
+            selected_table = None
+            for table in game.loot_tables:
+                if table.name == table_name:
+                    selected_table = table
+                    break
+
+            if not selected_table or not selected_table.items:
+                print(f"\n⚠️  {player_name}'s ticket for '{table_name}' cannot be used (table not found or empty)!")
+                player.active_consumable_effects.remove(ticket_effect)
+                continue
+
+            print(f"\n🎟️  {player_name} is using a FREE DRAW TICKET!")
+            print(f"   Drawing {draws} item(s) from '{table_name}' for FREE!")
+
+            items = selected_table.draw_multiple(draws)
+
+            # Get double quantity chance and sell price increase
+            double_chance = player.get_double_quantity_chance()
+            flat_price, percent_price = player.get_sell_price_increase()
+
+            doubled_count = 0
+            price_boosted_count = 0
+
+            for i, item in enumerate(items, 1):
+                # Roll rarity for Equipment items
+                if item.item_type.lower() == "equipment" and not item.rarity:
+                    item.rarity = game.rarity_system.roll_rarity()
+
+                # Apply sell price increase
+                price_boosted = False
+                if flat_price > 0 or percent_price > 0:
+                    original_value = item.gold_value
+                    item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+                    if item.gold_value > original_value:
+                        price_boosted_count += 1
+                        price_boosted = True
+
+                # Check for doubling
+                doubled = False
+                if double_chance > 0 and random.random() * 100 < double_chance:
+                    item.quantity *= 2
+                    item.gold_value *= 2
+                    doubled_count += 1
+                    doubled = True
+
+                # Display with indicators
+                indicators = []
+                if doubled:
+                    indicators.append("✨ DOUBLED!")
+                if price_boosted:
+                    indicators.append("💰 PRICE BOOST!")
+
+                if indicators:
+                    print(f"  {i}. {item} {' '.join(indicators)}")
+                else:
+                    print(f"  {i}. {item}")
+
+                player.add_item(item)
+
+            # Remove ticket after use
+            player.active_consumable_effects.remove(ticket_effect)
+            print(f"🎟️  Ticket used! {draws} free item(s) received.")
+
+            if doubled_count > 0:
+                print(f"✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+            if price_boosted_count > 0:
+                print(f"💰 {price_boosted_count} item(s) had their value increased!")
 
     # Select table
     print("\nAvailable loot tables:")
@@ -2007,17 +2147,35 @@ def draw_items_menu(game):
 
         player.remove_gold(total_cost)
 
-        items = selected_table.draw_multiple(count)
-        print(f"\n💰 Paid {total_cost}g ({count} x {actual_cost}g) to {selected_table.name}")
-        print(f"🎲 {player.name} drew {count} items:")
-
-        # Check for active consumable effects
+        # Check for active consumable effects before drawing
         has_double_next_draw = False
+        has_trash_to_treasure = False
         for effect in player.active_consumable_effects:
             if effect['effect_type'] == 'double_next_draw':
                 has_double_next_draw = True
-                print(f"🔥 CONSUMABLE EFFECT ACTIVE: {effect['name']} - All items will be DOUBLED!")
-                break
+            elif effect['effect_type'] == 'trash_to_treasure':
+                has_trash_to_treasure = True
+
+        # Apply trash_to_treasure: temporarily exclude highest weight item
+        excluded_item = None
+        if has_trash_to_treasure and selected_table.items:
+            # Find item with highest weight (lowest value item since high weight = common)
+            highest_weight_item = max(selected_table.items, key=lambda x: x.weight)
+            excluded_item = highest_weight_item
+            selected_table.items.remove(excluded_item)
+            print(f"🎯 TRASH TO TREASURE ACTIVE: '{excluded_item.name}' (highest weight) excluded from this draw!")
+
+        items = selected_table.draw_multiple(count)
+
+        # Restore excluded item
+        if excluded_item:
+            selected_table.items.append(excluded_item)
+
+        print(f"\n💰 Paid {total_cost}g ({count} x {actual_cost}g) to {selected_table.name}")
+        print(f"🎲 {player.name} drew {count} items:")
+
+        if has_double_next_draw:
+            print(f"🔥 CONSUMABLE EFFECT ACTIVE: Double Next Draw - All items will be DOUBLED!")
 
         # Get double quantity chance
         double_chance = player.get_double_quantity_chance()
@@ -2078,10 +2236,14 @@ def draw_items_menu(game):
             player.add_item(item)
             total_value += item.gold_value
 
-        # Remove consumable effect after use
+        # Remove consumable effects after use
         if has_double_next_draw:
             player.active_consumable_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] != 'double_next_draw']
             print(f"\n🔥 Consumable effect used! {consumable_doubled_count} item(s) DOUBLED from consumable!")
+
+        if has_trash_to_treasure:
+            player.active_consumable_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] != 'trash_to_treasure']
+            print(f"🎯 Trash to Treasure effect used! Highest weight item was excluded.")
 
         if doubled_count > 0:
             print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
