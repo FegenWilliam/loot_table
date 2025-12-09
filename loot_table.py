@@ -585,6 +585,56 @@ class GameSystem:
             return self.master_items.pop(index)
         return None
 
+    def _load_item_from_data(self, item_data):
+        """Helper to load a LootItem from saved data with enchantments and effects."""
+        item = LootItem(
+            item_data['name'],
+            item_data['weight'],
+            item_data['gold_value'],
+            item_data.get('item_type', 'misc'),
+            item_data.get('quantity', 1),
+            item_data.get('rarity')
+        )
+
+        # Load enchantments
+        for ench_data in item_data.get('enchantments', []):
+            # Handle both old and new format
+            if 'min_value' in ench_data:
+                # New format
+                ench = Enchantment(
+                    ench_data['name'],
+                    ench_data['enchant_type'],
+                    ench_data['min_value'],
+                    ench_data['max_value'],
+                    ench_data.get('is_percentage', False),
+                    ench_data.get('cost_amount', 1)
+                )
+                rolled_value = ench_data.get('rolled_value', 0)
+                item.enchantments.append((ench, rolled_value))
+            else:
+                # Old format - convert to new format
+                gold_value = ench_data.get('gold_value', 0)
+                ench = Enchantment(
+                    ench_data['name'],
+                    ench_data['enchant_type'],
+                    gold_value,  # min_value
+                    gold_value,  # max_value (same as min for old format)
+                    False,  # is_percentage
+                    1  # cost_amount
+                )
+                item.enchantments.append((ench, gold_value))
+
+        # Load effects
+        for eff_data in item_data.get('effects', []):
+            eff = Effect(
+                eff_data['effect_type'],
+                eff_data['value'],
+                eff_data.get('is_percentage', False)
+            )
+            item.add_effect(eff)
+
+        return item
+
     def save_game(self):
         """Save the game state to a JSON file."""
         try:
@@ -829,89 +879,17 @@ class GameSystem:
 
                 # Load inventory
                 for item_data in player_data.get('inventory', []):
-                    item = LootItem(
-                        item_data['name'],
-                        item_data['weight'],
-                        item_data['gold_value'],
-                        item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1),
-                        item_data.get('rarity')
-                    )
-                    # Load enchantments
-                    for ench_data in item_data.get('enchantments', []):
-                        # Handle both old and new format
-                        if 'min_value' in ench_data:
-                            # New format
-                            ench = Enchantment(
-                                ench_data['name'],
-                                ench_data['enchant_type'],
-                                ench_data['min_value'],
-                                ench_data['max_value'],
-                                ench_data.get('is_percentage', False),
-                                ench_data.get('cost_amount', 1)
-                            )
-                            rolled_value = ench_data.get('rolled_value', 0)
-                            item.enchantments.append((ench, rolled_value))
-                        else:
-                            # Old format - convert to new format
-                            gold_value = ench_data.get('gold_value', 0)
-                            ench = Enchantment(
-                                ench_data['name'],
-                                ench_data['enchant_type'],
-                                gold_value,  # min_value
-                                gold_value,  # max_value (same as min for old format)
-                                False,  # is_percentage
-                                1  # cost_amount
-                            )
-                            item.enchantments.append((ench, gold_value))
-                    # Load effects
-                    for eff_data in item_data.get('effects', []):
-                        eff = Effect(
-                            eff_data['effect_type'],
-                            eff_data['value'],
-                            eff_data.get('is_percentage', False)
-                        )
-                        item.add_effect(eff)
+                    item = self._load_item_from_data(item_data)
                     player.add_item(item)
 
                 # Load equipped items
                 for item_data in player_data.get('equipped_items', []):
-                    item = LootItem(
-                        item_data['name'],
-                        item_data['weight'],
-                        item_data['gold_value'],
-                        item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1),
-                        item_data.get('rarity')
-                    )
-                    # Load effects
-                    for eff_data in item_data.get('effects', []):
-                        eff = Effect(
-                            eff_data['effect_type'],
-                            eff_data['value'],
-                            eff_data.get('is_percentage', False)
-                        )
-                        item.add_effect(eff)
+                    item = self._load_item_from_data(item_data)
                     player.equip_item(item)
 
                 # Load consumed upgrades
                 for item_data in player_data.get('consumed_upgrades', []):
-                    item = LootItem(
-                        item_data['name'],
-                        item_data['weight'],
-                        item_data['gold_value'],
-                        item_data.get('item_type', 'misc'),
-                        item_data.get('quantity', 1),
-                        item_data.get('rarity')
-                    )
-                    # Load effects
-                    for eff_data in item_data.get('effects', []):
-                        eff = Effect(
-                            eff_data['effect_type'],
-                            eff_data['value'],
-                            eff_data.get('is_percentage', False)
-                        )
-                        item.add_effect(eff)
+                    item = self._load_item_from_data(item_data)
                     player.consume_upgrade(item)
 
                 # Load active consumable effects
