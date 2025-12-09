@@ -8,11 +8,12 @@ import copy
 
 class MasterItem:
     """Defines a master item template with name, type, and base gold value."""
-    def __init__(self, name, item_type, gold_value_per_unit, purchase_price=None):
+    def __init__(self, name, item_type, gold_value_per_unit, purchase_price=None, recipe=None):
         self.name = name
         self.item_type = item_type
         self.gold_value_per_unit = gold_value_per_unit
         self.purchase_price = purchase_price  # Price to buy from shop (None = not for sale)
+        self.recipe = recipe if recipe is not None else []  # List of ingredient names (empty = not craftable)
 
     def create_loot_item(self, quantity=1, weight=1000):
         """Create a LootItem instance from this master item."""
@@ -194,41 +195,6 @@ class RaritySystem:
             self.rarities[rarity]["weight"] = weight
             return True
         return False
-
-
-class CraftingRecipe:
-    def __init__(self, output_name, output_type, output_gold_value, purchase_price=None):
-        self.output_name = output_name
-        self.output_type = output_type
-        self.output_gold_value = output_gold_value
-        self.purchase_price = purchase_price  # Price to buy from shop (None = not for sale)
-        self.ingredients = []
-        self.effects = []  # Effects for Equipment/Upgrade items
-
-    def add_ingredient(self, item_name):
-        self.ingredients.append(item_name)
-
-    def add_effect(self, effect):
-        self.effects.append(effect)
-
-    def __str__(self):
-        if not self.ingredients:
-            ingredient_list = "No ingredients"
-        else:
-            # Count ingredients and display as "Nx Item"
-            ingredient_counts = {}
-            for ingredient in self.ingredients:
-                ingredient_counts[ingredient] = ingredient_counts.get(ingredient, 0) + 1
-            ingredient_parts = [f"{count}x {name}" if count > 1 else name
-                               for name, count in ingredient_counts.items()]
-            ingredient_list = ", ".join(ingredient_parts)
-
-        effects_str = f" [Effects: {len(self.effects)}]" if self.effects else ""
-        price_str = f" / {self.purchase_price}g buy" if self.purchase_price is not None else ""
-        return f"{self.output_name} ({self.output_type}, {self.output_gold_value}g{price_str}){effects_str} = [{ingredient_list}]"
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class Consumable:
@@ -524,7 +490,6 @@ class GameSystem:
         self.current_table_index = 0  # Currently selected table
         self.current_player_name = None  # Currently selected player
         self.players = {}
-        self.crafting_recipes = []
         self.enchantments = []
         self.enchant_cost_item = None
         self.enchant_cost_amount = 1
@@ -644,7 +609,8 @@ class GameSystem:
                         'name': item.name,
                         'item_type': item.item_type,
                         'gold_value_per_unit': item.gold_value_per_unit,
-                        'purchase_price': item.purchase_price
+                        'purchase_price': item.purchase_price,
+                        'recipe': item.recipe
                     }
                     for item in self.master_items
                 ],
@@ -744,24 +710,6 @@ class GameSystem:
                     }
                     for name, player in self.players.items()
                 },
-                'crafting_recipes': [
-                    {
-                        'output_name': recipe.output_name,
-                        'output_type': recipe.output_type,
-                        'output_gold_value': recipe.output_gold_value,
-                        'purchase_price': recipe.purchase_price,
-                        'ingredients': recipe.ingredients,
-                        'effects': [
-                            {
-                                'effect_type': eff.effect_type,
-                                'value': eff.value,
-                                'is_percentage': eff.is_percentage
-                            }
-                            for eff in recipe.effects
-                        ]
-                    }
-                    for recipe in self.crafting_recipes
-                ],
                 'enchantments': [
                     {
                         'name': ench.name,
@@ -827,7 +775,8 @@ class GameSystem:
                         item_data['name'],
                         item_data['item_type'],
                         item_data['gold_value_per_unit'],
-                        item_data.get('purchase_price')  # Backward compatible
+                        item_data.get('purchase_price'),  # Backward compatible
+                        item_data.get('recipe', [])  # Backward compatible
                     )
                     self.master_items.append(master_item)
 
@@ -896,26 +845,6 @@ class GameSystem:
                 player.active_consumable_effects = player_data.get('active_consumable_effects', [])
 
                 self.players[name] = player
-
-            # Load crafting recipes
-            self.crafting_recipes = []
-            for recipe_data in data.get('crafting_recipes', []):
-                recipe = CraftingRecipe(
-                    recipe_data['output_name'],
-                    recipe_data['output_type'],
-                    recipe_data['output_gold_value'],
-                    recipe_data.get('purchase_price')  # Backward compatible
-                )
-                recipe.ingredients = recipe_data['ingredients']
-                # Load effects
-                for eff_data in recipe_data.get('effects', []):
-                    eff = Effect(
-                        eff_data['effect_type'],
-                        eff_data['value'],
-                        eff_data.get('is_percentage', False)
-                    )
-                    recipe.add_effect(eff)
-                self.crafting_recipes.append(recipe)
 
             # Load enchantments
             self.enchantments = []
@@ -1210,12 +1139,11 @@ def show_admin_menu():
 
 def show_crafting_menu():
     print("\n--- CRAFTING MENU ---")
-    print("1. Add crafting recipe")
-    print("2. Delete crafting recipe")
-    print("3. View all recipes")
-    print("4. Craft item (player)")
-    print("5. Enchantment Menu")
-    print("6. Back to main menu")
+    print("1. Add/Edit Recipe")
+    print("2. Remove Recipe")
+    print("3. View All Recipes")
+    print("4. Edit Recipe")
+    print("5. Back to main menu")
 
 
 def show_effect_pool_menu():
@@ -2545,7 +2473,10 @@ def quick_turn_menu(game):
     print("🔨 PHASE 3: CRAFTING")
     print("=" * 60)
 
-    if not game.crafting_recipes:
+    # Get craftable items (master items with recipes)
+    craftable_items = [item for item in game.master_items if item.recipe]
+
+    if not craftable_items:
         print("No crafting recipes available. Skipping crafting phase.")
     else:
         for player_name, player in game.players.items():
@@ -2567,23 +2498,28 @@ def quick_turn_menu(game):
 
                 # Show available recipes
                 print("\nAvailable recipes:")
-                for i, recipe in enumerate(game.crafting_recipes):
-                    print(f"  {i}. {recipe}")
+                for i, master_item in enumerate(craftable_items):
+                    ingredient_counts = {}
+                    for ing in master_item.recipe:
+                        ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                    ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                       for name, count in ingredient_counts.items()]
+                    print(f"  {i}. {master_item.name} ({master_item.item_type}, {master_item.gold_value_per_unit}g) = [{', '.join(ingredient_parts)}]")
 
                 try:
                     recipe_index = int(input("\nEnter recipe number to craft (or -1 to skip): ").strip())
                     if recipe_index == -1:
                         break
 
-                    if recipe_index < 0 or recipe_index >= len(game.crafting_recipes):
+                    if recipe_index < 0 or recipe_index >= len(craftable_items):
                         print("Invalid recipe number!")
                         continue
 
-                    recipe = game.crafting_recipes[recipe_index]
+                    master_item = craftable_items[recipe_index]
 
                     # Count required quantities for each ingredient
                     required_ingredients = {}
-                    for ingredient in recipe.ingredients:
+                    for ingredient in master_item.recipe:
                         required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
 
                     # Check if player has all ingredients in required quantities
@@ -2598,32 +2534,32 @@ def quick_turn_menu(game):
                         continue
 
                     # Remove ingredients from inventory
-                    for ingredient in recipe.ingredients:
+                    for ingredient in master_item.recipe:
                         player.consume_item_by_name(ingredient, 1)
 
                     # Create and add crafted item
-                    crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
+                    crafted_item = LootItem(master_item.name, 0, master_item.gold_value_per_unit, master_item.item_type)
 
                     # If Equipment or Upgrade, allow player to roll for effects
-                    if recipe.output_type.lower() in ["equipment", "upgrade"]:
+                    if master_item.item_type.lower() in ["equipment", "upgrade"]:
                         if not game.effect_templates:
                             print(f"\n⚠️  No effect templates available! Item crafted without effects.")
-                            if recipe.output_type.lower() == "equipment":
+                            if master_item.item_type.lower() == "equipment":
                                 rarity = game.rarity_system.roll_rarity()
                                 crafted_item.rarity = rarity
-                                print(f"✓ Crafted [{rarity}] {recipe.output_name} (0 effects)")
+                                print(f"✓ Crafted [{rarity}] {master_item.name} (0 effects)")
                             else:
-                                print(f"✓ Crafted {recipe.output_name} (0 effects)")
+                                print(f"✓ Crafted {master_item.name} (0 effects)")
                         else:
                             # For Equipment, roll rarity first
                             max_effects = None
-                            if recipe.output_type.lower() == "equipment":
+                            if master_item.item_type.lower() == "equipment":
                                 rarity = game.rarity_system.roll_rarity()
                                 crafted_item.rarity = rarity
                                 max_effects = game.rarity_system.get_max_effects(rarity)
-                                print(f"\n✨ Rolled [{rarity}] {recipe.output_name}! (Max {max_effects} effects)")
+                                print(f"\n✨ Rolled [{rarity}] {master_item.name}! (Max {max_effects} effects)")
                             else:
-                                print(f"\n✓ Crafted {recipe.output_name}!")
+                                print(f"\n✓ Crafted {master_item.name}!")
 
                             # Roll for effects
                             print(f"\nRoll for effects? Cost: {game.effect_cost}g per roll")
@@ -2659,7 +2595,7 @@ def quick_turn_menu(game):
 
                             print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
                     else:
-                        print(f"✓ Crafted {recipe.output_name}!")
+                        print(f"✓ Crafted {master_item.name}!")
 
                     # Apply crafted sell price increase
                     flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
@@ -2725,50 +2661,34 @@ def quick_turn_menu(game):
 
 
 def manage_crafting(game):
+    """Manage crafting recipes stored in master items."""
     while True:
         show_crafting_menu()
         choice = input("Enter choice: ").strip()
 
         if choice == "1":
-            output_name = input("Enter output item name: ").strip()
-            if not output_name:
-                print("Name cannot be empty!")
+            # Add recipe to a master item
+            if not game.master_items:
+                print("No master items exist! Create items in the Master Items menu first.")
                 continue
 
-            output_type = input("Enter output item type: ").strip() or "misc"
+            print("\nAvailable master items:")
+            for i, item in enumerate(game.master_items):
+                recipe_status = f"Recipe: {len(item.recipe)} ingredients" if item.recipe else "No recipe"
+                print(f"  {i}. {item.name} ({item.item_type}) [{recipe_status}]")
 
             try:
-                output_gold = int(input(f"Enter output gold value (sell price): ").strip())
-                if output_gold < 0:
-                    print(f"Invalid gold value!")
+                index = int(input("\nEnter item number to add/edit recipe: ").strip())
+                if index < 0 or index >= len(game.master_items):
+                    print("Invalid item number!")
                     continue
 
-                purchase_input = input(f"Enter shop purchase price (leave blank for not for sale): ").strip()
-                purchase_price = None
-                if purchase_input:
-                    purchase_price = int(purchase_input)
-                    if purchase_price < 0:
-                        print("Purchase price cannot be negative!")
-                        continue
+                master_item = game.master_items[index]
+                master_item.recipe = []  # Reset recipe
 
-                recipe = CraftingRecipe(output_name, output_type, output_gold, purchase_price)
-
-                print("\nAdd ingredients (enter item names)")
-                print("\nAvailable from Master Items:")
-                if game.master_items:
-                    for master_item in sorted(game.master_items, key=lambda x: x.name):
-                        print(f"  - {master_item.name} ({master_item.item_type})")
-                else:
-                    print("  (No master items)")
-
-                print("\nAvailable from Crafting Recipes:")
-                if game.crafting_recipes:
-                    for recipe_item in sorted(game.crafting_recipes, key=lambda x: x.output_name):
-                        print(f"  - {recipe_item.output_name} ({recipe_item.output_type})")
-                else:
-                    print("  (No recipes yet)")
-
-                print("\nType 'done' when finished adding ingredients")
+                print(f"\nAdding recipe to {master_item.name}")
+                print("Type 'done' when finished adding ingredients")
+                
                 while True:
                     ingredient = input("Add ingredient (or 'done' to finish): ").strip()
                     if ingredient.lower() == 'done':
@@ -2781,197 +2701,133 @@ def manage_crafting(game):
                                 continue
                             # Add the ingredient the specified number of times
                             for _ in range(quantity):
-                                recipe.add_ingredient(ingredient)
+                                master_item.recipe.append(ingredient)
                             print(f"✓ Added {quantity}x {ingredient}")
                         except ValueError:
                             print("Invalid quantity! Please enter a number.")
 
-                if not recipe.ingredients:
+                if not master_item.recipe:
                     print("Recipe must have at least one ingredient!")
                     continue
 
-                game.crafting_recipes.append(recipe)
-                print(f"✓ Added recipe: {recipe}")
+                # Display recipe
+                ingredient_counts = {}
+                for ing in master_item.recipe:
+                    ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                   for name, count in ingredient_counts.items()]
+                print(f"✓ Recipe set for {master_item.name}: [{', '.join(ingredient_parts)}]")
             except ValueError:
                 print("Invalid input!")
 
         elif choice == "2":
-            if not game.crafting_recipes:
-                print("No recipes exist!")
+            # Remove recipe from master item
+            craftable_items = [item for item in game.master_items if item.recipe]
+
+            if not craftable_items:
+                print("No items have recipes!")
                 continue
 
-            print("\nCurrent recipes:")
-            for i, recipe in enumerate(game.crafting_recipes):
-                print(f"  {i}. {recipe}")
+            print("\nItems with recipes:")
+            for i, item in enumerate(craftable_items):
+                ingredient_counts = {}
+                for ing in item.recipe:
+                    ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                   for name, count in ingredient_counts.items()]
+                print(f"  {i}. {item.name} = [{', '.join(ingredient_parts)}]")
 
             try:
-                index = int(input("\nEnter recipe number to delete: ").strip())
-                if 0 <= index < len(game.crafting_recipes):
-                    deleted = game.crafting_recipes.pop(index)
-                    print(f"✓ Deleted recipe: {deleted.output_name}")
-                else:
-                    print("Invalid recipe number!")
+                index = int(input("\nEnter item number to remove recipe: ").strip())
+                if index < 0 or index >= len(craftable_items):
+                    print("Invalid item number!")
+                    continue
+
+                item = craftable_items[index]
+                item.recipe = []
+                print(f"✓ Removed recipe from {item.name}")
             except ValueError:
                 print("Invalid input!")
 
         elif choice == "3":
-            if not game.crafting_recipes:
+            # View all recipes
+            craftable_items = [item for item in game.master_items if item.recipe]
+
+            if not craftable_items:
                 print("No recipes exist!")
                 continue
 
             print("\nAll Crafting Recipes:")
-            for i, recipe in enumerate(game.crafting_recipes):
-                print(f"  {i}. {recipe}")
+            for i, item in enumerate(craftable_items):
+                ingredient_counts = {}
+                for ing in item.recipe:
+                    ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                   for name, count in ingredient_counts.items()]
+                print(f"  {i}. {item.name} ({item.item_type}, {item.gold_value_per_unit}g) = [{', '.join(ingredient_parts)}]")
 
         elif choice == "4":
-            if not game.crafting_recipes:
-                print("No recipes exist!")
+            # Edit existing recipe (same as add)
+            if not game.master_items:
+                print("No master items exist!")
                 continue
 
-            if not game.players:
-                print("No players exist!")
+            craftable_items = [item for item in game.master_items if item.recipe]
+
+            if not craftable_items:
+                print("No items have recipes!")
                 continue
 
-            print("\nAvailable players:")
-            for name, player in game.players.items():
-                current_marker = " <-- CURRENT" if name == game.current_player_name else ""
-                print(f"  - {name}{current_marker}")
-
-            player_name = get_player_name_input(game)
-            player = game.get_player(player_name)
-
-            if not player:
-                print(f"Player '{player_name}' not found!")
-                continue
-
-            print("\nAvailable recipes:")
-            for i, recipe in enumerate(game.crafting_recipes):
-                print(f"  {i}. {recipe}")
+            print("\nItems with recipes:")
+            for i, item in enumerate(craftable_items):
+                ingredient_counts = {}
+                for ing in item.recipe:
+                    ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                   for name, count in ingredient_counts.items()]
+                print(f"  {i}. {item.name} = [{', '.join(ingredient_parts)}]")
 
             try:
-                recipe_index = int(input("\nEnter recipe number to craft: ").strip())
-                if recipe_index < 0 or recipe_index >= len(game.crafting_recipes):
-                    print("Invalid recipe number!")
+                index = int(input("\nEnter item number to edit recipe: ").strip())
+                if index < 0 or index >= len(craftable_items):
+                    print("Invalid item number!")
                     continue
 
-                recipe = game.crafting_recipes[recipe_index]
-                crafted_count = 0
+                master_item = craftable_items[index]
+                master_item.recipe = []  # Reset recipe
 
-                print(f"\nCrafting {recipe.output_name}...")
-                print("Type 'done' to stop crafting, or it will auto-stop when out of ingredients")
-
+                print(f"\nEditing recipe for {master_item.name}")
+                print("Type 'done' when finished adding ingredients")
+                
                 while True:
-                    # Count required quantities for each ingredient
-                    required_ingredients = {}
-                    for ingredient in recipe.ingredients:
-                        required_ingredients[ingredient] = required_ingredients.get(ingredient, 0) + 1
-
-                    # Check if player has all ingredients in required quantities
-                    missing_ingredients = []
-
-                    for ingredient, required_count in required_ingredients.items():
-                        # Count total quantity of this ingredient across all stacks
-                        total_quantity = sum(item.quantity for item in player.inventory if item.name == ingredient)
-                        if total_quantity < required_count:
-                            missing_ingredients.append(f"{ingredient} ({total_quantity}/{required_count})")
-
-                    if missing_ingredients:
-                        if crafted_count > 0:
-                            print(f"\n❌ Out of ingredients! Missing: {', '.join(missing_ingredients)}")
-                        else:
-                            print(f"❌ Missing ingredients: {', '.join(missing_ingredients)}")
+                    ingredient = input("Add ingredient (or 'done' to finish): ").strip()
+                    if ingredient.lower() == 'done':
                         break
+                    if ingredient:
+                        try:
+                            quantity = int(input(f"How many {ingredient}? ").strip())
+                            if quantity <= 0:
+                                print("Quantity must be at least 1!")
+                                continue
+                            for _ in range(quantity):
+                                master_item.recipe.append(ingredient)
+                            print(f"✓ Added {quantity}x {ingredient}")
+                        except ValueError:
+                            print("Invalid quantity! Please enter a number.")
 
-                    # Remove ingredients from inventory (consumes from stacks)
-                    for ingredient in recipe.ingredients:
-                        player.consume_item_by_name(ingredient, 1)
-
-                    # Create and add crafted item
-                    crafted_item = LootItem(recipe.output_name, 0, recipe.output_gold_value, recipe.output_type)
-
-                    # If Equipment or Upgrade, allow player to roll for effects
-                    if recipe.output_type.lower() in ["equipment", "upgrade"]:
-                        if not game.effect_templates:
-                            print(f"\n⚠️  No effect templates available! Item crafted without effects.")
-                            if recipe.output_type.lower() == "equipment":
-                                rarity = game.rarity_system.roll_rarity()
-                                crafted_item.rarity = rarity
-                                print(f"✓ Crafted [{rarity}] {recipe.output_name} (0 effects)")
-                            else:
-                                print(f"✓ Crafted {recipe.output_name} (0 effects)")
-                        else:
-                            # For Equipment, roll rarity first
-                            max_effects = None
-                            if recipe.output_type.lower() == "equipment":
-                                rarity = game.rarity_system.roll_rarity()
-                                crafted_item.rarity = rarity
-                                max_effects = game.rarity_system.get_max_effects(rarity)
-                                print(f"\n✨ Rolled [{rarity}] {recipe.output_name}! (Max {max_effects} effects)")
-                            else:
-                                print(f"\n✓ Crafted {recipe.output_name}!")
-
-                            # Roll for effects
-                            print(f"\nRoll for effects? Cost: {game.effect_cost}g per roll")
-                            print(f"Your gold: {player.gold}g")
-
-                            effects_added = 0
-                            while True:
-                                # Check if Equipment has reached max effects
-                                if max_effects and effects_added >= max_effects:
-                                    print(f"\n✓ Reached maximum effects for {rarity} rarity ({max_effects})!")
-                                    break
-
-                                roll_choice = input(f"\nRoll for effect #{effects_added + 1}? (y/n): ").strip().lower()
-                                if roll_choice != 'y':
-                                    break
-
-                                # Check if player has enough currency
-                                if player.gold < game.effect_cost:
-                                    print(f"❌ Not enough gold! Need {game.effect_cost}g, have {player.gold}g")
-                                    break
-
-                                # Deduct cost and roll for effect
-                                player.remove_gold(game.effect_cost)
-                                weights = [tmpl.weight for tmpl in game.effect_templates]
-                                rolled_template = random.choices(game.effect_templates, weights=weights, k=1)[0]
-                                effect = rolled_template.create_effect()
-                                crafted_item.add_effect(effect)
-                                effects_added += 1
-
-                                print(f"🎲 Rolled: {rolled_template.name}")
-                                print(f"   Effect: {effect}")
-                                print(f"   gold: {player.gold}g")
-
-                            print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
-                    else:
-                        print(f"✓ Crafted {recipe.output_name}!")
-
-                    # Apply crafted sell price increase
-                    flat_craft_price, percent_craft_price = player.get_crafted_sell_price_increase()
-                    if flat_craft_price > 0 or percent_craft_price > 0:
-                        original_craft_value = crafted_item.gold_value
-                        crafted_item.gold_value = player.calculate_item_value(original_craft_value, is_crafted=True)
-                        if crafted_item.gold_value > original_craft_value:
-                            print(f"💰 Crafted item value increased: {original_craft_value}g → {crafted_item.gold_value}g (+{flat_craft_price} flat, +{percent_craft_price}%)")
-
-                    player.add_item(crafted_item)
-                    crafted_count += 1
-
-                    # Ask if want to continue
-                    continue_craft = input("Craft another? (press Enter to continue, 'done' to stop): ").strip().lower()
-                    if continue_craft == 'done':
-                        break
-
-                if crafted_count > 0:
-                    print(f"\n🎉 Total crafted: {crafted_count}x {recipe.output_name}")
+                if master_item.recipe:
+                    ingredient_counts = {}
+                    for ing in master_item.recipe:
+                        ingredient_counts[ing] = ingredient_counts.get(ing, 0) + 1
+                    ingredient_parts = [f"{count}x {name}" if count > 1 else name
+                                       for name, count in ingredient_counts.items()]
+                    print(f"✓ Recipe updated for {master_item.name}: [{', '.join(ingredient_parts)}]")
             except ValueError:
                 print("Invalid input!")
 
         elif choice == "5":
-            manage_enchantments(game)
-
-        elif choice == "6":
             break
+
 
 
 def manage_enchantments(game):
