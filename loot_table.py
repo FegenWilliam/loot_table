@@ -997,7 +997,7 @@ def manage_master_items(game):
             try:
                 gold_per_unit = int(input(f"Enter gold value per unit (sell price): ").strip())
                 if gold_per_unit < 0:
-                    print(f"{Gold} value cannot be negative!")
+                    print(f"Gold value cannot be negative!")
                     continue
 
                 purchase_input = input(f"Enter shop purchase price (leave blank for not for sale): ").strip()
@@ -1900,7 +1900,7 @@ def manage_players(game):
             player = game.get_player(name)
             if player:
                 print(f"\n--- {player.name} ---")
-                print(f"{Gold}: {player.gold}g")
+                print(f"Gold: {player.gold}g")
                 print(f"Inventory ({len(player.inventory)} items):")
                 for i, item in enumerate(player.inventory):
                     print(f"  {i}. {item}")
@@ -2186,7 +2186,7 @@ def sell_items_menu(game):
 
     while True:
         print(f"\n--- {player.name}'s Inventory ---")
-        print(f"{Gold}: {player.gold}g")
+        print(f"Gold: {player.gold}g")
         print("\nItems:")
         for i, item in enumerate(player.inventory):
             print(f"  {i}. {item}")
@@ -2338,7 +2338,7 @@ def quick_turn_menu(game):
     # Iterate through all players for drawing
     for player_name, player in game.players.items():
         print(f"\n--- {player_name}'s Turn to Draw ---")
-        print(f"{Gold}: {player.gold}g")
+        print(f"Gold: {player.gold}g")
 
         # Show available tables
         print("\nAvailable loot tables:")
@@ -2445,7 +2445,7 @@ def quick_turn_menu(game):
 
     for player_name, player in game.players.items():
         print(f"\n--- {player_name} ---")
-        print(f"{Gold}: {player.gold}g | Items: {len(player.inventory)}")
+        print(f"Gold: {player.gold}g | Items: {len(player.inventory)}")
 
         if player.inventory:
             # Group items by name for compact display
@@ -2626,7 +2626,7 @@ def quick_turn_menu(game):
 
         while True:
             print(f"\n{player_name}'s Inventory:")
-            print(f"{Gold}: {player.gold}g")
+            print(f"Gold: {player.gold}g")
             print("Items:")
             for i, item in enumerate(player.inventory):
                 print(f"  {i}. {item}")
