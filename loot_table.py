@@ -37,26 +37,30 @@ class LootItem:
         self.item_type = item_type
         self.quantity = quantity
         self.rarity = rarity  # For Equipment items: Normal, Rare, Epic, Legendary
-        self.enchantments = []
-        self.effects = []  # For Equipment and Upgrade items
+        self.enchantments = []  # List of (enchantment, rolled_value) tuples
+        # For monetary: rolled_value is the actual rolled gold modifier
+        # For functional: rolled_value is None
 
     def add_enchantment(self, enchantment, rolled_value=None):
-        """Add an enchantment to this item. If rolled_value is provided, use it; otherwise roll a new value."""
-        if rolled_value is None:
-            rolled_value = enchantment.apply_to_item(self)
-        else:
-            # Apply the provided rolled value
-            if enchantment.is_percentage:
-                change = self.gold_value * (rolled_value / 100.0)
-                self.gold_value = max(0, int(self.gold_value + change))
+        """Add an enchantment to this item.
+
+        For monetary enchantments: If rolled_value is provided, use it; otherwise roll a new value.
+        For functional enchantments: rolled_value should be None (no rolling).
+        """
+        if enchantment.enchantment_type == "monetary":
+            if rolled_value is None:
+                rolled_value = enchantment.apply_to_item(self)
             else:
-                self.gold_value = max(0, int(self.gold_value + rolled_value))
+                # Apply the provided rolled value
+                if enchantment.is_percentage:
+                    change = self.gold_value * (rolled_value / 100.0)
+                    self.gold_value = max(0, int(self.gold_value + change))
+                else:
+                    self.gold_value = max(0, int(self.gold_value + rolled_value))
+        # For functional enchantments, rolled_value stays None
 
-        # Store enchantment with its rolled value as a tuple
+        # Store enchantment with its rolled value (or None for functional) as a tuple
         self.enchantments.append((enchantment, rolled_value))
-
-    def add_effect(self, effect):
-        self.effects.append(effect)
 
     def get_display_name(self):
         base_name = f"{self.quantity}x {self.name}" if self.quantity > 1 else self.name
@@ -65,25 +69,30 @@ class LootItem:
         if self.rarity:
             base_name = f"[{self.rarity}] {base_name}"
 
+        # Show only monetary enchantments in display name
         if self.enchantments:
-            enchant_strs = []
-            for ench, rolled_value in self.enchantments:
-                if ench.is_percentage:
-                    enchant_strs.append(f"{ench.name} {rolled_value:+.1f}%")
-                else:
-                    enchant_strs.append(f"{ench.name} {rolled_value:+.0f}g")
-            return f"{base_name} [{', '.join(enchant_strs)}]"
+            monetary_enchants = [(ench, rv) for ench, rv in self.enchantments if ench.enchantment_type == "monetary"]
+            if monetary_enchants:
+                enchant_strs = []
+                for ench, rolled_value in monetary_enchants:
+                    if ench.is_percentage:
+                        enchant_strs.append(f"{ench.name} {rolled_value:+.1f}%")
+                    else:
+                        enchant_strs.append(f"{ench.name} {rolled_value:+.0f}g")
+                return f"{base_name} [{', '.join(enchant_strs)}]"
         return base_name
 
     def get_effects_display(self):
-        if not self.effects:
+        """Get display string for functional enchantments."""
+        functional_enchants = [(ench, rv) for ench, rv in self.enchantments if ench.enchantment_type == "functional"]
+        if not functional_enchants:
             return ""
         effect_strs = []
-        for effect in self.effects:
-            if effect.is_percentage:
-                effect_strs.append(f"-{effect.value}%")
+        for ench, _ in functional_enchants:
+            if ench.is_percentage:
+                effect_strs.append(f"-{ench.value}%")
             else:
-                effect_strs.append(f"-{effect.value}")
+                effect_strs.append(f"-{ench.value}")
         return f" (Effects: {', '.join(effect_strs)})"
 
     def __str__(self):
@@ -94,20 +103,67 @@ class LootItem:
 
 
 class Enchantment:
-    def __init__(self, name, enchant_type, min_value, max_value, is_percentage=False, cost_amount=1):
+    """Unified enchantment system supporting both functional and monetary types.
+
+    Monetary enchantments: Modify gold value, applicable to any item type
+    Functional enchantments: Provide gameplay effects, only for equipment/upgrades
+    """
+    def __init__(self, name, enchantment_type, **kwargs):
+        """
+        Args:
+            name: Display name of the enchantment
+            enchantment_type: "monetary" or "functional"
+
+            For monetary enchantments:
+                enchant_type: Item type compatibility (e.g., "weapon", "armor", "misc")
+                min_value: Minimum gold value change
+                max_value: Maximum gold value change
+                is_percentage: True for %, False for flat
+                cost_amount: Cost to apply this enchantment
+
+            For functional enchantments:
+                effect_type: Type of effect (e.g., "draw_cost_reduction")
+                value: Fixed effect value
+                is_percentage: True for %, False for flat
+                weight: Weight for random selection when crafting
+        """
         self.name = name
-        self.enchant_type = enchant_type
-        self.min_value = min_value  # Can be negative for penalty
-        self.max_value = max_value  # Can be positive for bonus
-        self.is_percentage = is_percentage  # True for %, False for flat
-        self.cost_amount = cost_amount  # Individual cost for this enchantment
+        self.enchantment_type = enchantment_type
+
+        if enchantment_type == "monetary":
+            self.enchant_type = kwargs.get('enchant_type', 'misc')
+            self.min_value = kwargs.get('min_value', 0)
+            self.max_value = kwargs.get('max_value', 0)
+            self.is_percentage = kwargs.get('is_percentage', False)
+            self.cost_amount = kwargs.get('cost_amount', 1)
+            # Functional fields not used
+            self.effect_type = None
+            self.value = None
+            self.weight = None
+        elif enchantment_type == "functional":
+            self.effect_type = kwargs.get('effect_type', 'draw_cost_reduction')
+            self.value = kwargs.get('value', 0)
+            self.is_percentage = kwargs.get('is_percentage', False)
+            self.weight = kwargs.get('weight', 1000)
+            # Monetary fields not used
+            self.enchant_type = None
+            self.min_value = None
+            self.max_value = None
+            self.cost_amount = None
+        else:
+            raise ValueError(f"Invalid enchantment_type: {enchantment_type}. Must be 'monetary' or 'functional'")
 
     def roll_value(self):
-        """Roll a random value within the enchantment's range."""
+        """Roll a random value within the enchantment's range (monetary only)."""
+        if self.enchantment_type != "monetary":
+            raise ValueError("Cannot roll value for non-monetary enchantments")
         return random.uniform(self.min_value, self.max_value)
 
     def apply_to_item(self, item):
-        """Apply this enchantment to an item and return the rolled value."""
+        """Apply this enchantment to an item and return the rolled value (monetary only)."""
+        if self.enchantment_type != "monetary":
+            raise ValueError("Cannot apply functional enchantment to item gold value")
+
         rolled_value = self.roll_value()
 
         if self.is_percentage:
@@ -120,50 +176,26 @@ class Enchantment:
 
         return rolled_value
 
-    def __str__(self):
-        if self.is_percentage:
-            return f"{self.name} ({self.enchant_type}, {self.min_value:+.1f}% to {self.max_value:+.1f}%, Cost: {self.cost_amount})"
-        else:
-            return f"{self.name} ({self.enchant_type}, {self.min_value:+.0f}g to {self.max_value:+.0f}g, Cost: {self.cost_amount})"
-
-    def __repr__(self):
-        return self.__str__()
-
-
-class Effect:
-    def __init__(self, effect_type, value, is_percentage=False):
-        self.effect_type = effect_type  # e.g., "draw_cost_reduction"
-        self.value = value  # numeric value
-        self.is_percentage = is_percentage  # True for %, False for flat
-
-    def __str__(self):
+    def get_effect_string(self):
+        """Get display string for functional enchantments."""
+        if self.enchantment_type != "functional":
+            return ""
         if self.is_percentage:
             return f"{self.effect_type}: -{self.value}%"
         else:
             return f"{self.effect_type}: -{self.value}"
 
-    def __repr__(self):
-        return self.__str__()
-
-
-class EffectTemplate:
-    """Template for effects that can be rolled when crafting Equipment/Upgrades."""
-    def __init__(self, name, effect_type, value, is_percentage=False, weight=1000):
-        self.name = name
-        self.effect_type = effect_type
-        self.value = value
-        self.is_percentage = is_percentage
-        self.weight = weight
-
-    def create_effect(self):
-        """Create an Effect instance from this template."""
-        return Effect(self.effect_type, self.value, self.is_percentage)
-
     def __str__(self):
-        if self.is_percentage:
-            return f"{self.name}: {self.effect_type} -{self.value}% (weight: {self.weight})"
-        else:
-            return f"{self.name}: {self.effect_type} -{self.value} (weight: {self.weight})"
+        if self.enchantment_type == "monetary":
+            if self.is_percentage:
+                return f"{self.name} ({self.enchant_type}, {self.min_value:+.1f}% to {self.max_value:+.1f}%, Cost: {self.cost_amount})"
+            else:
+                return f"{self.name} ({self.enchant_type}, {self.min_value:+.0f}g to {self.max_value:+.0f}g, Cost: {self.cost_amount})"
+        else:  # functional
+            if self.is_percentage:
+                return f"{self.name}: {self.effect_type} -{self.value}% (weight: {self.weight})"
+            else:
+                return f"{self.name}: {self.effect_type} -{self.value} (weight: {self.weight})"
 
     def __repr__(self):
         return self.__str__()
@@ -171,7 +203,7 @@ class EffectTemplate:
 
 class RaritySystem:
     def __init__(self):
-        # Define rarities with their weights and effect slots
+        # Define rarities with their weights and functional enchantment slots
         self.rarities = {
             "Normal": {"weight": 500, "max_effects": 1},
             "Rare": {"weight": 300, "max_effects": 2},
@@ -199,16 +231,23 @@ class RaritySystem:
 
 class Consumable:
     """Consumable item with temporary effects."""
-    def __init__(self, name, effect_type, effect_value=None, gold_value=0):
+    def __init__(self, name, effect_type, effect_value=None, gold_value=0, table_name=None):
         self.name = name
         self.item_type = "consumable"
         self.effect_type = effect_type  # e.g., "double_next_draw"
         self.effect_value = effect_value  # Optional value for the effect
         self.gold_value = gold_value  # Base sell value
+        self.table_name = table_name  # For free_draw_ticket: which table to draw from
 
     def __str__(self):
         if self.effect_type == "double_next_draw":
             return f"{self.name} (consumable, {self.gold_value}g) - Doubles quantity on next draw"
+        elif self.effect_type == "free_draw_ticket":
+            draws = self.effect_value if self.effect_value else 1
+            table_info = f" from '{self.table_name}'" if self.table_name else " from selected table"
+            return f"{self.name} (consumable, {self.gold_value}g) - Draw {draws} item(s) for free{table_info}"
+        elif self.effect_type == "trash_to_treasure":
+            return f"{self.name} (consumable, {self.gold_value}g) - Next draw excludes highest weight item"
         return f"{self.name} (consumable, {self.gold_value}g) - {self.effect_type}"
 
     def __repr__(self):
@@ -226,8 +265,8 @@ class Player:
 
     def add_item(self, item):
         """Add item to inventory with automatic stacking."""
-        # Items with enchantments, effects, or rarity don't stack (they're unique)
-        if item.enchantments or item.effects or item.rarity:
+        # Items with enchantments (monetary or functional) or rarity don't stack (they're unique)
+        if item.enchantments or item.rarity:
             self.inventory.append(item)
             return
 
@@ -236,7 +275,6 @@ class Player:
             if (existing_item.name == item.name and
                 existing_item.item_type == item.item_type and
                 not existing_item.enchantments and
-                not existing_item.effects and
                 not existing_item.rarity):
                 # Stack found - combine quantities and values
                 existing_item.quantity += item.quantity
@@ -315,21 +353,21 @@ class Player:
 
         # Add effects from equipped items
         for item in self.equipped_items:
-            for effect in item.effects:
-                if effect.effect_type == "draw_cost_reduction":
-                    if effect.is_percentage:
-                        percentage_reduction += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "draw_cost_reduction":
+                    if ench.is_percentage:
+                        percentage_reduction += ench.value
                     else:
-                        flat_reduction += effect.value
+                        flat_reduction += ench.value
 
         # Add effects from consumed upgrades
         for item in self.consumed_upgrades:
-            for effect in item.effects:
-                if effect.effect_type == "draw_cost_reduction":
-                    if effect.is_percentage:
-                        percentage_reduction += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "draw_cost_reduction":
+                    if ench.is_percentage:
+                        percentage_reduction += ench.value
                     else:
-                        flat_reduction += effect.value
+                        flat_reduction += ench.value
 
         return flat_reduction, percentage_reduction
 
@@ -351,15 +389,15 @@ class Player:
 
         # Add effects from equipped items
         for item in self.equipped_items:
-            for effect in item.effects:
-                if effect.effect_type == "double_quantity_chance":
-                    total_chance += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "double_quantity_chance":
+                    total_chance += ench.value
 
         # Add effects from consumed upgrades
         for item in self.consumed_upgrades:
-            for effect in item.effects:
-                if effect.effect_type == "double_quantity_chance":
-                    total_chance += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "double_quantity_chance":
+                    total_chance += ench.value
 
         return min(100, total_chance)  # Cap at 100%
 
@@ -370,21 +408,21 @@ class Player:
 
         # Add effects from equipped items
         for item in self.equipped_items:
-            for effect in item.effects:
-                if effect.effect_type == "sell_price_increase":
-                    if effect.is_percentage:
-                        percentage_increase += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "sell_price_increase":
+                    if ench.is_percentage:
+                        percentage_increase += ench.value
                     else:
-                        flat_increase += effect.value
+                        flat_increase += ench.value
 
         # Add effects from consumed upgrades
         for item in self.consumed_upgrades:
-            for effect in item.effects:
-                if effect.effect_type == "sell_price_increase":
-                    if effect.is_percentage:
-                        percentage_increase += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "sell_price_increase":
+                    if ench.is_percentage:
+                        percentage_increase += ench.value
                     else:
-                        flat_increase += effect.value
+                        flat_increase += ench.value
 
         return flat_increase, percentage_increase
 
@@ -395,21 +433,21 @@ class Player:
 
         # Add effects from equipped items
         for item in self.equipped_items:
-            for effect in item.effects:
-                if effect.effect_type == "crafted_sell_price_increase":
-                    if effect.is_percentage:
-                        percentage_increase += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "crafted_sell_price_increase":
+                    if ench.is_percentage:
+                        percentage_increase += ench.value
                     else:
-                        flat_increase += effect.value
+                        flat_increase += ench.value
 
         # Add effects from consumed upgrades
         for item in self.consumed_upgrades:
-            for effect in item.effects:
-                if effect.effect_type == "crafted_sell_price_increase":
-                    if effect.is_percentage:
-                        percentage_increase += effect.value
+            for ench, _ in item.enchantments:
+                if ench.enchantment_type == "functional" and ench.effect_type == "crafted_sell_price_increase":
+                    if ench.is_percentage:
+                        percentage_increase += ench.value
                     else:
-                        flat_increase += effect.value
+                        flat_increase += ench.value
 
         return flat_increase, percentage_increase
 
@@ -490,11 +528,10 @@ class GameSystem:
         self.current_table_index = 0  # Currently selected table
         self.current_player_name = None  # Currently selected player
         self.players = {}
-        self.enchantments = []
+        self.enchantments = []  # Contains both monetary and functional enchantments
         self.enchant_cost_item = None
         self.enchant_cost_amount = 1
-        self.effect_templates = []  # Pool of effects that can be rolled
-        self.effect_cost = 100  # Currency cost to roll for an effect
+        self.functional_enchant_cost = 100  # Currency cost to roll for a functional enchantment when crafting
         self.rarity_system = RaritySystem()  # Rarity system for equipment
         self.consumables = []  # Consumable items with temporary effects
         self.save_file = "loot_system_save_new.json"
@@ -551,7 +588,7 @@ class GameSystem:
         return None
 
     def _load_item_from_data(self, item_data):
-        """Helper to load a LootItem from saved data with enchantments and effects."""
+        """Helper to load a LootItem from saved data with enchantments (monetary and functional)."""
         item = LootItem(
             item_data['name'],
             item_data['weight'],
@@ -561,42 +598,72 @@ class GameSystem:
             item_data.get('rarity')
         )
 
-        # Load enchantments
+        # Load enchantments (both monetary and functional)
         for ench_data in item_data.get('enchantments', []):
-            # Handle both old and new format
-            if 'min_value' in ench_data:
-                # New format
+            # Check if this is new unified format or old format
+            if 'enchantment_type' in ench_data:
+                # New unified format
+                ench_type = ench_data['enchantment_type']
+                if ench_type == "monetary":
+                    ench = Enchantment(
+                        ench_data['name'],
+                        "monetary",
+                        enchant_type=ench_data.get('enchant_type', 'misc'),
+                        min_value=ench_data.get('min_value', 0),
+                        max_value=ench_data.get('max_value', 0),
+                        is_percentage=ench_data.get('is_percentage', False),
+                        cost_amount=ench_data.get('cost_amount', 1)
+                    )
+                    rolled_value = ench_data.get('rolled_value', 0)
+                else:  # functional
+                    ench = Enchantment(
+                        ench_data['name'],
+                        "functional",
+                        effect_type=ench_data.get('effect_type', 'draw_cost_reduction'),
+                        value=ench_data.get('value', 0),
+                        is_percentage=ench_data.get('is_percentage', False),
+                        weight=ench_data.get('weight', 1000)
+                    )
+                    rolled_value = None  # Functional enchantments don't have rolled values
+                item.enchantments.append((ench, rolled_value))
+            elif 'min_value' in ench_data:
+                # Old monetary enchantment format
                 ench = Enchantment(
                     ench_data['name'],
-                    ench_data['enchant_type'],
-                    ench_data['min_value'],
-                    ench_data['max_value'],
-                    ench_data.get('is_percentage', False),
-                    ench_data.get('cost_amount', 1)
+                    "monetary",
+                    enchant_type=ench_data.get('enchant_type', 'misc'),
+                    min_value=ench_data['min_value'],
+                    max_value=ench_data['max_value'],
+                    is_percentage=ench_data.get('is_percentage', False),
+                    cost_amount=ench_data.get('cost_amount', 1)
                 )
                 rolled_value = ench_data.get('rolled_value', 0)
                 item.enchantments.append((ench, rolled_value))
             else:
-                # Old format - convert to new format
+                # Very old format - convert to monetary
                 gold_value = ench_data.get('gold_value', 0)
                 ench = Enchantment(
                     ench_data['name'],
-                    ench_data['enchant_type'],
-                    gold_value,  # min_value
-                    gold_value,  # max_value (same as min for old format)
-                    False,  # is_percentage
-                    1  # cost_amount
+                    "monetary",
+                    enchant_type=ench_data.get('enchant_type', 'misc'),
+                    min_value=gold_value,
+                    max_value=gold_value,
+                    is_percentage=False,
+                    cost_amount=1
                 )
                 item.enchantments.append((ench, gold_value))
 
-        # Load effects
+        # Load old effects and convert to functional enchantments (backward compatibility)
         for eff_data in item_data.get('effects', []):
-            eff = Effect(
-                eff_data['effect_type'],
-                eff_data['value'],
-                eff_data.get('is_percentage', False)
+            ench = Enchantment(
+                f"{eff_data['effect_type']}",  # Use effect_type as name
+                "functional",
+                effect_type=eff_data['effect_type'],
+                value=eff_data['value'],
+                is_percentage=eff_data.get('is_percentage', False),
+                weight=1000  # Default weight
             )
-            item.add_effect(eff)
+            item.enchantments.append((ench, None))  # No rolled value for functional
 
         return item
 
@@ -648,22 +715,18 @@ class GameSystem:
                                 'enchantments': [
                                     {
                                         'name': ench.name,
+                                        'enchantment_type': ench.enchantment_type,
                                         'enchant_type': ench.enchant_type,
                                         'min_value': ench.min_value,
                                         'max_value': ench.max_value,
+                                        'effect_type': ench.effect_type,
+                                        'value': ench.value,
+                                        'weight': ench.weight,
                                         'is_percentage': ench.is_percentage,
                                         'cost_amount': ench.cost_amount,
                                         'rolled_value': rolled_value
                                     }
                                     for ench, rolled_value in item.enchantments
-                                ],
-                                'effects': [
-                                    {
-                                        'effect_type': eff.effect_type,
-                                        'value': eff.value,
-                                        'is_percentage': eff.is_percentage
-                                    }
-                                    for eff in item.effects
                                 ]
                             }
                             for item in player.inventory
@@ -676,13 +739,21 @@ class GameSystem:
                                 'item_type': item.item_type,
                                 'quantity': item.quantity,
                                 'rarity': item.rarity,
-                                'effects': [
+                                'enchantments': [
                                     {
-                                        'effect_type': eff.effect_type,
-                                        'value': eff.value,
-                                        'is_percentage': eff.is_percentage
+                                        'name': ench.name,
+                                        'enchantment_type': ench.enchantment_type,
+                                        'enchant_type': ench.enchant_type,
+                                        'min_value': ench.min_value,
+                                        'max_value': ench.max_value,
+                                        'effect_type': ench.effect_type,
+                                        'value': ench.value,
+                                        'weight': ench.weight,
+                                        'is_percentage': ench.is_percentage,
+                                        'cost_amount': ench.cost_amount,
+                                        'rolled_value': rolled_value
                                     }
-                                    for eff in item.effects
+                                    for ench, rolled_value in item.enchantments
                                 ]
                             }
                             for item in player.equipped_items
@@ -695,13 +766,21 @@ class GameSystem:
                                 'item_type': item.item_type,
                                 'quantity': item.quantity,
                                 'rarity': item.rarity,
-                                'effects': [
+                                'enchantments': [
                                     {
-                                        'effect_type': eff.effect_type,
-                                        'value': eff.value,
-                                        'is_percentage': eff.is_percentage
+                                        'name': ench.name,
+                                        'enchantment_type': ench.enchantment_type,
+                                        'enchant_type': ench.enchant_type,
+                                        'min_value': ench.min_value,
+                                        'max_value': ench.max_value,
+                                        'effect_type': ench.effect_type,
+                                        'value': ench.value,
+                                        'weight': ench.weight,
+                                        'is_percentage': ench.is_percentage,
+                                        'cost_amount': ench.cost_amount,
+                                        'rolled_value': rolled_value
                                     }
-                                    for eff in item.effects
+                                    for ench, rolled_value in item.enchantments
                                 ]
                             }
                             for item in player.consumed_upgrades
@@ -713,9 +792,13 @@ class GameSystem:
                 'enchantments': [
                     {
                         'name': ench.name,
+                        'enchantment_type': ench.enchantment_type,
                         'enchant_type': ench.enchant_type,
                         'min_value': ench.min_value,
                         'max_value': ench.max_value,
+                        'effect_type': ench.effect_type,
+                        'value': ench.value,
+                        'weight': ench.weight,
                         'is_percentage': ench.is_percentage,
                         'cost_amount': ench.cost_amount
                     }
@@ -723,23 +806,14 @@ class GameSystem:
                 ],
                 'enchant_cost_item': self.enchant_cost_item,
                 'enchant_cost_amount': self.enchant_cost_amount,
-                'effect_templates': [
-                    {
-                        'name': eff_tmpl.name,
-                        'effect_type': eff_tmpl.effect_type,
-                        'value': eff_tmpl.value,
-                        'is_percentage': eff_tmpl.is_percentage,
-                        'weight': eff_tmpl.weight
-                    }
-                    for eff_tmpl in self.effect_templates
-                ],
-                'effect_cost': self.effect_cost,
+                'functional_enchant_cost': self.functional_enchant_cost,
                 'consumables': [
                     {
                         'name': cons.name,
                         'effect_type': cons.effect_type,
                         'effect_value': cons.effect_value,
-                        'gold_value': cons.gold_value
+                        'gold_value': cons.gold_value,
+                        'table_name': cons.table_name
                     }
                     for cons in self.consumables
                 ],
@@ -846,51 +920,75 @@ class GameSystem:
 
                 self.players[name] = player
 
-            # Load enchantments
+            # Load enchantments (both monetary and functional)
             self.enchantments = []
             for ench_data in data.get('enchantments', []):
-                # Handle both old and new format
-                if 'min_value' in ench_data:
-                    # New format
+                # Check if this is new unified format or old format
+                if 'enchantment_type' in ench_data:
+                    # New unified format
+                    ench_type = ench_data['enchantment_type']
+                    if ench_type == "monetary":
+                        ench = Enchantment(
+                            ench_data['name'],
+                            "monetary",
+                            enchant_type=ench_data.get('enchant_type', 'misc'),
+                            min_value=ench_data.get('min_value', 0),
+                            max_value=ench_data.get('max_value', 0),
+                            is_percentage=ench_data.get('is_percentage', False),
+                            cost_amount=ench_data.get('cost_amount', 1)
+                        )
+                    else:  # functional
+                        ench = Enchantment(
+                            ench_data['name'],
+                            "functional",
+                            effect_type=ench_data.get('effect_type', 'draw_cost_reduction'),
+                            value=ench_data.get('value', 0),
+                            is_percentage=ench_data.get('is_percentage', False),
+                            weight=ench_data.get('weight', 1000)
+                        )
+                elif 'min_value' in ench_data:
+                    # Old monetary enchantment format
                     ench = Enchantment(
                         ench_data['name'],
-                        ench_data['enchant_type'],
-                        ench_data['min_value'],
-                        ench_data['max_value'],
-                        ench_data.get('is_percentage', False),
-                        ench_data.get('cost_amount', 1)
+                        "monetary",
+                        enchant_type=ench_data.get('enchant_type', 'misc'),
+                        min_value=ench_data['min_value'],
+                        max_value=ench_data['max_value'],
+                        is_percentage=ench_data.get('is_percentage', False),
+                        cost_amount=ench_data.get('cost_amount', 1)
                     )
                 else:
-                    # Old format - convert to new format
+                    # Very old format - convert to monetary
                     gold_value = ench_data.get('gold_value', 0)
                     ench = Enchantment(
                         ench_data['name'],
-                        ench_data['enchant_type'],
-                        gold_value,  # min_value
-                        gold_value,  # max_value (same as min for old format)
-                        False,  # is_percentage
-                        1  # cost_amount
+                        "monetary",
+                        enchant_type=ench_data.get('enchant_type', 'misc'),
+                        min_value=gold_value,
+                        max_value=gold_value,
+                        is_percentage=False,
+                        cost_amount=1
                     )
+                self.enchantments.append(ench)
+
+            # Load old effect_templates and convert to functional enchantments (backward compatibility)
+            for eff_tmpl_data in data.get('effect_templates', []):
+                ench = Enchantment(
+                    eff_tmpl_data['name'],
+                    "functional",
+                    effect_type=eff_tmpl_data['effect_type'],
+                    value=eff_tmpl_data['value'],
+                    is_percentage=eff_tmpl_data.get('is_percentage', False),
+                    weight=eff_tmpl_data.get('weight', 1000)
+                )
                 self.enchantments.append(ench)
 
             # Load global enchantment cost
             self.enchant_cost_item = data.get('enchant_cost_item')
             self.enchant_cost_amount = data.get('enchant_cost_amount', 1)
 
-            # Load effect templates
-            self.effect_templates = []
-            for eff_tmpl_data in data.get('effect_templates', []):
-                eff_tmpl = EffectTemplate(
-                    eff_tmpl_data['name'],
-                    eff_tmpl_data['effect_type'],
-                    eff_tmpl_data['value'],
-                    eff_tmpl_data.get('is_percentage', False),
-                    eff_tmpl_data.get('weight', 1000)
-                )
-                self.effect_templates.append(eff_tmpl)
-
-            # Load effect cost
-            self.effect_cost = data.get('effect_cost', 100)
+            # Load functional enchantment cost (fallback to old effect_cost for backward compatibility)
+            self.functional_enchant_cost = data.get('functional_enchant_cost', data.get('effect_cost', 100))
 
             # Load consumables
             self.consumables = []
@@ -899,7 +997,8 @@ class GameSystem:
                     cons_data['name'],
                     cons_data['effect_type'],
                     cons_data.get('effect_value'),
-                    cons_data.get('gold_value', 0)
+                    cons_data.get('gold_value', 0),
+                    cons_data.get('table_name')  # Backward compatibility: None if not present
                 )
                 self.consumables.append(consumable)
 
@@ -1132,9 +1231,8 @@ def show_admin_menu():
     print("3. Gift item to player")
     print("4. Take item from player")
     print("5. Configure rarity weights")
-    print("6. Manage effect pool")
-    print("7. Manage shop")
-    print("8. Back to main menu")
+    print("6. Manage shop")
+    print("7. Back to main menu")
 
 
 def show_crafting_menu():
@@ -1144,16 +1242,6 @@ def show_crafting_menu():
     print("3. View All Recipes")
     print("4. Edit Recipe")
     print("5. Back to main menu")
-
-
-def show_effect_pool_menu():
-    print("\n--- EFFECT POOL MENU ---")
-    print("1. Add effect template")
-    print("2. Edit effect template")
-    print("3. Delete effect template")
-    print("4. View all effect templates")
-    print("5. Set effect roll cost")
-    print("6. Back to admin menu")
 
 
 def show_enchantment_menu():
@@ -1174,156 +1262,6 @@ def show_equipment_menu():
     print("3. Unequip item")
     print("4. Consume upgrade")
     print("5. Back to main menu")
-
-
-def manage_effect_pool(game):
-    """Manage the pool of effect templates that can be rolled when crafting."""
-    while True:
-        show_effect_pool_menu()
-        choice = input("Enter choice: ").strip()
-
-        if choice == "1":
-            # Add effect template
-            name = input("Enter effect template name: ").strip()
-            if not name:
-                print("Name cannot be empty!")
-                continue
-
-            print("\nAvailable effect types:")
-            print("  1. draw_cost_reduction")
-            print("  2. double_quantity_chance")
-            print("  3. sell_price_increase (for non-crafted items)")
-            print("  4. crafted_sell_price_increase (for crafted items)")
-            effect_type_choice = input("Choose effect type (1-4): ").strip()
-
-            if effect_type_choice == '1':
-                effect_type = "draw_cost_reduction"
-            elif effect_type_choice == '2':
-                effect_type = "double_quantity_chance"
-            elif effect_type_choice == '3':
-                effect_type = "sell_price_increase"
-            elif effect_type_choice == '4':
-                effect_type = "crafted_sell_price_increase"
-            else:
-                print("Invalid effect type!")
-                continue
-
-            try:
-                value = float(input("Enter effect value: ").strip())
-                if value <= 0:
-                    print("Value must be greater than 0!")
-                    continue
-
-                # double_quantity_chance is always percentage
-                if effect_type == "double_quantity_chance":
-                    is_percentage = True
-                    print("(Note: double_quantity_chance is always a percentage value)")
-                else:
-                    is_percentage_input = input("Is this a percentage value? (y/n): ").strip().lower()
-                    is_percentage = is_percentage_input == 'y'
-
-                weight = float(input("Enter weight (default 1000): ").strip() or "1000")
-                if weight <= 0:
-                    print("Weight must be greater than 0!")
-                    continue
-
-                effect_tmpl = EffectTemplate(name, effect_type, value, is_percentage, weight)
-                game.effect_templates.append(effect_tmpl)
-                print(f"✓ Added effect template: {effect_tmpl}")
-            except ValueError:
-                print("Invalid input!")
-
-        elif choice == "2":
-            # Edit effect template
-            if not game.effect_templates:
-                print("No effect templates exist!")
-                continue
-
-            print("\nCurrent effect templates:")
-            for i, tmpl in enumerate(game.effect_templates):
-                print(f"  {i}. {tmpl}")
-
-            try:
-                index = int(input("\nEnter effect template number to edit: ").strip())
-                if index < 0 or index >= len(game.effect_templates):
-                    print("Invalid template number!")
-                    continue
-
-                tmpl = game.effect_templates[index]
-                print(f"\nEditing: {tmpl.name}")
-                print("Leave blank to keep current value")
-
-                new_name = input(f"New name [{tmpl.name}]: ").strip()
-                weight_input = input(f"New weight [{tmpl.weight}]: ").strip()
-                value_input = input(f"New value [{tmpl.value}]: ").strip()
-
-                if new_name:
-                    tmpl.name = new_name
-                if weight_input:
-                    tmpl.weight = float(weight_input)
-                if value_input:
-                    tmpl.value = float(value_input)
-
-                print(f"✓ Updated effect template!")
-            except ValueError:
-                print("Invalid input!")
-
-        elif choice == "3":
-            # Delete effect template
-            if not game.effect_templates:
-                print("No effect templates exist!")
-                continue
-
-            print("\nCurrent effect templates:")
-            for i, tmpl in enumerate(game.effect_templates):
-                print(f"  {i}. {tmpl}")
-
-            try:
-                index = int(input("\nEnter effect template number to delete: ").strip())
-                if 0 <= index < len(game.effect_templates):
-                    deleted = game.effect_templates.pop(index)
-                    print(f"✓ Deleted effect template: {deleted.name}")
-                else:
-                    print("Invalid template number!")
-            except ValueError:
-                print("Invalid input!")
-
-        elif choice == "4":
-            # View all effect templates
-            if not game.effect_templates:
-                print("No effect templates exist!")
-                continue
-
-            print(f"\n{'=' * 60}")
-            print(f"Effect Roll Cost: {game.effect_cost}g")
-            print(f"{'=' * 60}")
-            print("\nAll Effect Templates:")
-            total_weight = sum(t.weight for t in game.effect_templates)
-            for i, tmpl in enumerate(game.effect_templates):
-                percentage = (tmpl.weight / total_weight) * 100
-                print(f"  {i}. {tmpl.name}: {tmpl.effect_type}")
-                if tmpl.is_percentage:
-                    print(f"      Value: {tmpl.value}%")
-                else:
-                    print(f"      Value: {tmpl.value}")
-                print(f"      Weight: {tmpl.weight} ({percentage:.2f}%)")
-                print()
-
-        elif choice == "5":
-            # Set effect roll cost
-            print(f"\nCurrent effect roll cost: {game.effect_cost}g")
-            try:
-                new_cost = int(input(f"Enter new cost (in gold): ").strip())
-                if new_cost < 0:
-                    print("Cost cannot be negative!")
-                    continue
-                game.effect_cost = new_cost
-                print(f"✓ Effect roll cost set to {game.effect_cost}g")
-            except ValueError:
-                print("Invalid input!")
-
-        elif choice == "6":
-            break
 
 
 def manage_equipment_upgrades(game):
@@ -1360,16 +1298,18 @@ def manage_equipment_upgrades(game):
             print(f"\nEquipped Items ({len(player.equipped_items)}):")
             if player.equipped_items:
                 for i, item in enumerate(player.equipped_items):
-                    effects_str = ", ".join([str(e) for e in item.effects])
-                    print(f"  {i}. {item.name} [{effects_str}]")
+                    functional_enchants = [e for e, _ in item.enchantments if e.enchantment_type == "functional"]
+                    effects_str = ", ".join([e.get_effect_string() for e in functional_enchants])
+                    print(f"  {i}. {item.name} [{effects_str if effects_str else 'No effects'}]")
             else:
                 print("  (none)")
 
             print(f"\nConsumed Upgrades ({len(player.consumed_upgrades)}):")
             if player.consumed_upgrades:
                 for item in player.consumed_upgrades:
-                    effects_str = ", ".join([str(e) for e in item.effects])
-                    print(f"  - {item.name} [{effects_str}]")
+                    functional_enchants = [e for e, _ in item.enchantments if e.enchantment_type == "functional"]
+                    effects_str = ", ".join([e.get_effect_string() for e in functional_enchants])
+                    print(f"  - {item.name} [{effects_str if effects_str else 'No effects'}]")
             else:
                 print("  (none)")
 
@@ -1394,7 +1334,8 @@ def manage_equipment_upgrades(game):
 
             print(f"\n{player.name}'s Equipment Items:")
             for idx, (inv_idx, item) in enumerate(equipment_items):
-                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                functional_enchants = [e for e, _ in item.enchantments if e.enchantment_type == "functional"]
+                effects_str = ", ".join([e.get_effect_string() for e in functional_enchants]) if functional_enchants else "No effects"
                 print(f"  {idx}. {item.name} [{effects_str}]")
 
             try:
@@ -1427,8 +1368,9 @@ def manage_equipment_upgrades(game):
 
             print(f"\n{player.name}'s Equipped Items:")
             for i, item in enumerate(player.equipped_items):
-                effects_str = ", ".join([str(e) for e in item.effects])
-                print(f"  {i}. {item.name} [{effects_str}]")
+                functional_enchants = [e for e, _ in item.enchantments if e.enchantment_type == "functional"]
+                effects_str = ", ".join([e.get_effect_string() for e in functional_enchants])
+                print(f"  {i}. {item.name} [{effects_str if effects_str else 'No effects'}]")
 
             try:
                 index = int(input("\nEnter item number to unequip: ").strip())
@@ -1462,7 +1404,8 @@ def manage_equipment_upgrades(game):
 
             print(f"\n{player.name}'s Upgrade Items:")
             for idx, (inv_idx, item) in enumerate(upgrade_items):
-                effects_str = ", ".join([str(e) for e in item.effects]) if item.effects else "No effects"
+                functional_enchants = [e for e, _ in item.enchantments if e.enchantment_type == "functional"]
+                effects_str = ", ".join([e.get_effect_string() for e in functional_enchants]) if functional_enchants else "No effects"
                 print(f"  {idx}. {item.name} [{effects_str}]")
 
             try:
@@ -1502,10 +1445,51 @@ def manage_consumables(game):
 
             print("\nAvailable effect types:")
             print("  1. double_next_draw - Doubles quantity on next draw (guaranteed)")
-            effect_choice = input("Choose effect type (1): ").strip()
+            print("  2. free_draw_ticket - Draw X items for free from selected table")
+            print("  3. trash_to_treasure - Next draw excludes highest weight item")
+            effect_choice = input("Choose effect type (1-3): ").strip()
+
+            effect_type = None
+            effect_value = None
+            table_name = None
 
             if effect_choice == "1":
                 effect_type = "double_next_draw"
+                effect_value = None
+            elif effect_choice == "2":
+                effect_type = "free_draw_ticket"
+
+                # Select table for this ticket
+                if not game.loot_tables:
+                    print("❌ No loot tables exist! Create a loot table first.")
+                    continue
+
+                print("\nAvailable loot tables:")
+                for i, table in enumerate(game.loot_tables):
+                    print(f"  {i}. {table.name}")
+
+                try:
+                    table_idx = int(input("Select table for this ticket: ").strip())
+                    if table_idx < 0 or table_idx >= len(game.loot_tables):
+                        print("Invalid table number!")
+                        continue
+                    table_name = game.loot_tables[table_idx].name
+                except ValueError:
+                    print("Invalid input!")
+                    continue
+
+                try:
+                    draws = int(input("Enter number of free draws: ").strip())
+                    if draws <= 0:
+                        print("Number of draws must be greater than 0!")
+                        continue
+                    effect_value = draws
+                except ValueError:
+                    print("Invalid number!")
+                    continue
+            elif effect_choice == "3":
+                effect_type = "trash_to_treasure"
+                effect_value = None
             else:
                 print("Invalid effect type!")
                 continue
@@ -1516,7 +1500,7 @@ def manage_consumables(game):
                     print("Value cannot be negative!")
                     continue
 
-                consumable = Consumable(name, effect_type, None, gold_value)
+                consumable = Consumable(name, effect_type, effect_value, gold_value, table_name)
                 game.consumables.append(consumable)
                 print(f"✓ Added consumable: {consumable}")
             except ValueError:
@@ -1987,24 +1971,55 @@ def manage_players(game):
                     print(f"Warning: Consumable '{consumable_item.name}' not found in definitions! Using as-is.")
                     # Still allow consumption if it's in inventory even if not in definitions
                     effect_type = "double_next_draw"  # Default for now
+                    effect_value = None
+                    table_name = None
                 else:
                     effect_type = matching_consumable.effect_type
+                    effect_value = matching_consumable.effect_value
+                    table_name = matching_consumable.table_name
+
+                # Validate ticket table exists
+                if effect_type == "free_draw_ticket":
+                    if not table_name:
+                        print(f"❌ Ticket '{consumable_item.name}' has no table assigned! Cannot use.")
+                        continue
+
+                    # Check if table still exists
+                    table_exists = any(t.name == table_name for t in game.loot_tables)
+                    if not table_exists:
+                        print(f"❌ Table '{table_name}' no longer exists! Cannot use ticket.")
+                        continue
 
                 # Remove from inventory
                 player.remove_item(inv_idx)
 
-                # Add effect to active effects
-                player.active_consumable_effects.append({
+                # Add effect to active effects with additional data
+                effect_data = {
                     'effect_type': effect_type,
                     'name': consumable_item.name
-                })
+                }
+
+                if effect_type == "free_draw_ticket":
+                    effect_data['table_name'] = table_name
+                    effect_data['draws'] = effect_value if effect_value else 1
+
+                player.active_consumable_effects.append(effect_data)
 
                 print(f"\n✨ {player.name} used {consumable_item.name}!")
                 if effect_type == "double_next_draw":
                     print("   Effect: Next draw will have DOUBLED quantity (guaranteed)!")
+                elif effect_type == "free_draw_ticket":
+                    draws = effect_value if effect_value else 1
+                    print(f"   Effect: Draw {draws} item(s) for FREE from {table_name}!")
+                elif effect_type == "trash_to_treasure":
+                    print("   Effect: Next draw will exclude the highest weight item!")
+
                 print(f"\nActive effects: {len(player.active_consumable_effects)}")
                 for eff in player.active_consumable_effects:
-                    print(f"  - {eff['name']} ({eff['effect_type']})")
+                    if eff['effect_type'] == 'free_draw_ticket':
+                        print(f"  - {eff['name']} ({eff['draws']} draw(s) from {eff['table_name']})")
+                    else:
+                        print(f"  - {eff['name']} ({eff['effect_type']})")
 
             except ValueError:
                 print("Invalid input!")
@@ -2021,6 +2036,83 @@ def draw_items_menu(game):
     if not game.players:
         print("No players exist! Add players first.")
         return
+
+    # Check for and process free draw tickets first
+    for player_name, player in game.players.items():
+        ticket_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] == 'free_draw_ticket']
+
+        for ticket_effect in ticket_effects:
+            table_name = ticket_effect.get('table_name')
+            draws = ticket_effect.get('draws', 1)
+
+            # Find the table
+            selected_table = None
+            for table in game.loot_tables:
+                if table.name == table_name:
+                    selected_table = table
+                    break
+
+            if not selected_table or not selected_table.items:
+                print(f"\n⚠️  {player_name}'s ticket for '{table_name}' cannot be used (table not found or empty)!")
+                player.active_consumable_effects.remove(ticket_effect)
+                continue
+
+            print(f"\n🎟️  {player_name} is using a FREE DRAW TICKET!")
+            print(f"   Drawing {draws} item(s) from '{table_name}' for FREE!")
+
+            items = selected_table.draw_multiple(draws)
+
+            # Get double quantity chance and sell price increase
+            double_chance = player.get_double_quantity_chance()
+            flat_price, percent_price = player.get_sell_price_increase()
+
+            doubled_count = 0
+            price_boosted_count = 0
+
+            for i, item in enumerate(items, 1):
+                # Roll rarity for Equipment items
+                if item.item_type.lower() == "equipment" and not item.rarity:
+                    item.rarity = game.rarity_system.roll_rarity()
+
+                # Apply sell price increase
+                price_boosted = False
+                if flat_price > 0 or percent_price > 0:
+                    original_value = item.gold_value
+                    item.gold_value = player.calculate_item_value(original_value, is_crafted=False)
+                    if item.gold_value > original_value:
+                        price_boosted_count += 1
+                        price_boosted = True
+
+                # Check for doubling
+                doubled = False
+                if double_chance > 0 and random.random() * 100 < double_chance:
+                    item.quantity *= 2
+                    item.gold_value *= 2
+                    doubled_count += 1
+                    doubled = True
+
+                # Display with indicators
+                indicators = []
+                if doubled:
+                    indicators.append("✨ DOUBLED!")
+                if price_boosted:
+                    indicators.append("💰 PRICE BOOST!")
+
+                if indicators:
+                    print(f"  {i}. {item} {' '.join(indicators)}")
+                else:
+                    print(f"  {i}. {item}")
+
+                player.add_item(item)
+
+            # Remove ticket after use
+            player.active_consumable_effects.remove(ticket_effect)
+            print(f"🎟️  Ticket used! {draws} free item(s) received.")
+
+            if doubled_count > 0:
+                print(f"✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
+            if price_boosted_count > 0:
+                print(f"💰 {price_boosted_count} item(s) had their value increased!")
 
     # Select table
     print("\nAvailable loot tables:")
@@ -2073,17 +2165,35 @@ def draw_items_menu(game):
 
         player.remove_gold(total_cost)
 
-        items = selected_table.draw_multiple(count)
-        print(f"\n💰 Paid {total_cost}g ({count} x {actual_cost}g) to {selected_table.name}")
-        print(f"🎲 {player.name} drew {count} items:")
-
-        # Check for active consumable effects
+        # Check for active consumable effects before drawing
         has_double_next_draw = False
+        has_trash_to_treasure = False
         for effect in player.active_consumable_effects:
             if effect['effect_type'] == 'double_next_draw':
                 has_double_next_draw = True
-                print(f"🔥 CONSUMABLE EFFECT ACTIVE: {effect['name']} - All items will be DOUBLED!")
-                break
+            elif effect['effect_type'] == 'trash_to_treasure':
+                has_trash_to_treasure = True
+
+        # Apply trash_to_treasure: temporarily exclude highest weight item
+        excluded_item = None
+        if has_trash_to_treasure and selected_table.items:
+            # Find item with highest weight (lowest value item since high weight = common)
+            highest_weight_item = max(selected_table.items, key=lambda x: x.weight)
+            excluded_item = highest_weight_item
+            selected_table.items.remove(excluded_item)
+            print(f"🎯 TRASH TO TREASURE ACTIVE: '{excluded_item.name}' (highest weight) excluded from this draw!")
+
+        items = selected_table.draw_multiple(count)
+
+        # Restore excluded item
+        if excluded_item:
+            selected_table.items.append(excluded_item)
+
+        print(f"\n💰 Paid {total_cost}g ({count} x {actual_cost}g) to {selected_table.name}")
+        print(f"🎲 {player.name} drew {count} items:")
+
+        if has_double_next_draw:
+            print(f"🔥 CONSUMABLE EFFECT ACTIVE: Double Next Draw - All items will be DOUBLED!")
 
         # Get double quantity chance
         double_chance = player.get_double_quantity_chance()
@@ -2144,10 +2254,14 @@ def draw_items_menu(game):
             player.add_item(item)
             total_value += item.gold_value
 
-        # Remove consumable effect after use
+        # Remove consumable effects after use
         if has_double_next_draw:
             player.active_consumable_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] != 'double_next_draw']
             print(f"\n🔥 Consumable effect used! {consumable_doubled_count} item(s) DOUBLED from consumable!")
+
+        if has_trash_to_treasure:
+            player.active_consumable_effects = [eff for eff in player.active_consumable_effects if eff['effect_type'] != 'trash_to_treasure']
+            print(f"🎯 Trash to Treasure effect used! Highest weight item was excluded.")
 
         if doubled_count > 0:
             print(f"\n✨ {doubled_count} item(s) had their quantity doubled! (Chance: {double_chance}%)")
@@ -2542,10 +2656,13 @@ def quick_turn_menu(game):
                     # Create and add crafted item
                     crafted_item = LootItem(master_item.name, 0, master_item.gold_value_per_unit, master_item.item_type)
 
-                    # If Equipment or Upgrade, allow player to roll for effects
+                    # If Equipment or Upgrade, allow player to roll for functional enchantments
                     if master_item.item_type.lower() in ["equipment", "upgrade"]:
-                        if not game.effect_templates:
-                            print(f"\n⚠️  No effect templates available! Item crafted without effects.")
+                        # Get functional enchantments from the unified enchantments list
+                        functional_enchants = [e for e in game.enchantments if e.enchantment_type == "functional"]
+
+                        if not functional_enchants:
+                            print(f"\n⚠️  No functional enchantments available! Item crafted without effects.")
                             if master_item.item_type.lower() == "equipment":
                                 rarity = game.rarity_system.roll_rarity()
                                 crafted_item.rarity = rarity
@@ -2563,8 +2680,8 @@ def quick_turn_menu(game):
                             else:
                                 print(f"\n✓ Crafted {master_item.name}!")
 
-                            # Roll for effects
-                            print(f"\nRoll for effects? Cost: {game.effect_cost}g per roll")
+                            # Roll for functional enchantments
+                            print(f"\nRoll for effects? Cost: {game.functional_enchant_cost}g per roll")
                             print(f"Your gold: {player.gold}g")
 
                             effects_added = 0
@@ -2579,20 +2696,19 @@ def quick_turn_menu(game):
                                     break
 
                                 # Check if player has enough currency
-                                if player.gold < game.effect_cost:
-                                    print(f"❌ Not enough gold! Need {game.effect_cost}g, have {player.gold}g")
+                                if player.gold < game.functional_enchant_cost:
+                                    print(f"❌ Not enough gold! Need {game.functional_enchant_cost}g, have {player.gold}g")
                                     break
 
-                                # Deduct cost and roll for effect
-                                player.remove_gold(game.effect_cost)
-                                weights = [tmpl.weight for tmpl in game.effect_templates]
-                                rolled_template = random.choices(game.effect_templates, weights=weights, k=1)[0]
-                                effect = rolled_template.create_effect()
-                                crafted_item.add_effect(effect)
+                                # Deduct cost and roll for functional enchantment
+                                player.remove_gold(game.functional_enchant_cost)
+                                weights = [ench.weight for ench in functional_enchants]
+                                rolled_enchant = random.choices(functional_enchants, weights=weights, k=1)[0]
+                                crafted_item.add_enchantment(rolled_enchant, rolled_value=None)  # No rolled value for functional
                                 effects_added += 1
 
-                                print(f"🎲 Rolled: {rolled_template.name}")
-                                print(f"   Effect: {effect}")
+                                print(f"🎲 Rolled: {rolled_enchant.name}")
+                                print(f"   Effect: {rolled_enchant.get_effect_string()}")
                                 print(f"   gold: {player.gold}g")
 
                             print(f"\n✓ Final item: {crafted_item.get_display_name()} ({effects_added} effects)")
@@ -3309,14 +3425,10 @@ def admin_menu(game):
             print("\n✓ Rarity weights updated!")
 
         elif choice == "6":
-            # Manage effect pool
-            manage_effect_pool(game)
-
-        elif choice == "7":
             # Manage shop
             manage_shop(game)
 
-        elif choice == "8":
+        elif choice == "7":
             break
 
 
