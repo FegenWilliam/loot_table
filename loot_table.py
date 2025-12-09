@@ -3151,6 +3151,11 @@ def shop_menu(game):
             # Add items to inventory
             for _ in range(quantity):
                 loot_item = LootItem(shop_item.name, 1000, shop_item.gold_value, shop_item.item_type, 1)
+
+                # Roll rarity for Equipment items
+                if shop_item.item_type.lower() == "equipment":
+                    loot_item.rarity = game.rarity_system.roll_rarity()
+
                 player.add_item(loot_item)
 
             print(f"\n✓ Purchased {quantity}x {shop_item.name} for {total_cost}{game.currency_symbol}!")
