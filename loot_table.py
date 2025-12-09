@@ -231,21 +231,6 @@ class CraftingRecipe:
         return self.__str__()
 
 
-class ShopItem:
-    """Simple shop item with name, type, sell value, and purchase price."""
-    def __init__(self, name, item_type, gold_value, purchase_price):
-        self.name = name
-        self.item_type = item_type
-        self.gold_value = gold_value
-        self.purchase_price = purchase_price
-
-    def __str__(self):
-        return f"{self.name} ({self.item_type}) - Buy: {self.purchase_price}g, Sells for: {self.gold_value}g"
-
-    def __repr__(self):
-        return self.__str__()
-
-
 class Consumable:
     """Consumable item with temporary effects."""
     def __init__(self, name, effect_type, effect_value=None, gold_value=0):
@@ -546,7 +531,6 @@ class GameSystem:
         self.effect_templates = []  # Pool of effects that can be rolled
         self.effect_cost = 100  # Currency cost to roll for an effect
         self.rarity_system = RaritySystem()  # Rarity system for equipment
-        self.shop_items = []  # Shop catalog of items players can buy
         self.consumables = []  # Consumable items with temporary effects
         self.save_file = "loot_system_save_new.json"
 
@@ -752,15 +736,6 @@ class GameSystem:
                     for eff_tmpl in self.effect_templates
                 ],
                 'effect_cost': self.effect_cost,
-                'shop_items': [
-                    {
-                        'name': item.name,
-                        'item_type': item.item_type,
-                        'gold_value': item.gold_value,
-                        'purchase_price': item.purchase_price
-                    }
-                    for item in self.shop_items
-                ],
                 'consumables': [
                     {
                         'name': cons.name,
@@ -1009,17 +984,6 @@ class GameSystem:
 
             # Load effect cost
             self.effect_cost = data.get('effect_cost', 100)
-
-            # Load shop items
-            self.shop_items = []
-            for shop_item_data in data.get('shop_items', []):
-                shop_item = ShopItem(
-                    shop_item_data['name'],
-                    shop_item_data['item_type'],
-                    shop_item_data['gold_value'],
-                    shop_item_data['purchase_price']
-                )
-                self.shop_items.append(shop_item)
 
             # Load consumables
             self.consumables = []
@@ -2376,10 +2340,19 @@ def shop_menu(game):
         print(f"{player.name}'s gold: {player.gold}g")
         print()
 
+        # Get items available for purchase (master items with purchase_price set)
+        shop_items = [item for item in game.master_items if item.purchase_price is not None]
+
+        if not shop_items:
+            print("No items available in shop!")
+            print("(Use the admin menu to add items to the shop)")
+            input("\nPress Enter to return...")
+            break
+
         # Display shop items
         print("Available items:")
-        for i, shop_item in enumerate(game.shop_items):
-            print(f"  {i}. {shop_item}")
+        for i, item in enumerate(shop_items):
+            print(f"  {i}. {item.name} ({item.item_type}) - Buy: {item.purchase_price}g, Sells for: {item.gold_value_per_unit}g")
 
         choice = input("\nEnter item number to buy (or 'back' to return): ").strip().lower()
 
@@ -2388,11 +2361,11 @@ def shop_menu(game):
 
         try:
             index = int(choice)
-            if index < 0 or index >= len(game.shop_items):
+            if index < 0 or index >= len(shop_items):
                 print("Invalid item number!")
                 continue
 
-            shop_item = game.shop_items[index]
+            master_item = shop_items[index]
 
             # Get quantity
             quantity = int(input("How many to buy? ").strip())
@@ -2401,7 +2374,7 @@ def shop_menu(game):
                 continue
 
             # Calculate total cost
-            total_cost = shop_item.purchase_price * quantity
+            total_cost = master_item.purchase_price * quantity
 
             # Check if player has enough money
             if player.gold < total_cost:
@@ -2413,15 +2386,15 @@ def shop_menu(game):
 
             # Add items to inventory
             for _ in range(quantity):
-                loot_item = LootItem(shop_item.name, 1000, shop_item.gold_value, shop_item.item_type, 1)
+                loot_item = LootItem(master_item.name, 1000, master_item.gold_value_per_unit, master_item.item_type, 1)
 
                 # Roll rarity for Equipment items
-                if shop_item.item_type.lower() == "equipment":
+                if master_item.item_type.lower() == "equipment":
                     loot_item.rarity = game.rarity_system.roll_rarity()
 
                 player.add_item(loot_item)
 
-            print(f"\n✓ Purchased {quantity}x {shop_item.name} for {total_cost}g!")
+            print(f"\n✓ Purchased {quantity}x {master_item.name} for {total_cost}g!")
             print(f"New gold balance: {player.gold}g")
 
         except ValueError:
@@ -3267,70 +3240,79 @@ def manage_shop(game):
     """Manage shop items that players can purchase."""
     while True:
         print("\n--- SHOP MANAGEMENT ---")
-        print("1. Add item to shop")
-        print("2. Remove item from shop")
+        print("1. Add item to shop (set purchase price)")
+        print("2. Remove item from shop (clear purchase price)")
         print("3. View all shop items")
         print("4. Back to admin menu")
 
         choice = input("Enter choice: ").strip()
 
         if choice == "1":
-            # Add item to shop
-            name = input("Enter item name: ").strip()
-            if not name:
-                print("Name cannot be empty!")
+            # Add item to shop - select a master item and set its purchase price
+            if not game.master_items:
+                print("No master items exist! Create items in the Master Items menu first.")
                 continue
 
-            item_type = input("Enter item type (misc/equipment/upgrade/consumable): ").strip() or "misc"
+            print("\nAvailable master items:")
+            for i, item in enumerate(game.master_items):
+                shop_status = f"In shop: {item.purchase_price}g" if item.purchase_price is not None else "Not in shop"
+                print(f"  {i}. {item.name} ({item.item_type}) - Sells for: {item.gold_value_per_unit}g [{shop_status}]")
 
             try:
-                sell_value = int(input(f"Enter sell value (what players get when they sell it): ").strip())
-                if sell_value < 0:
-                    print("Sell value cannot be negative!")
+                index = int(input("\nEnter item number to add to shop: ").strip())
+                if index < 0 or index >= len(game.master_items):
+                    print("Invalid item number!")
                     continue
 
-                purchase_price = int(input(f"Enter purchase price (what players pay to buy it): ").strip())
+                master_item = game.master_items[index]
+
+                purchase_price = int(input(f"Enter purchase price for {master_item.name}: ").strip())
                 if purchase_price < 0:
                     print("Purchase price cannot be negative!")
                     continue
 
-                shop_item = ShopItem(name, item_type, sell_value, purchase_price)
-                game.shop_items.append(shop_item)
-                print(f"✓ Added to shop: {shop_item}")
+                master_item.purchase_price = purchase_price
+                print(f"✓ Added {master_item.name} to shop at {purchase_price}g")
             except ValueError:
                 print("Invalid input!")
 
         elif choice == "2":
-            # Remove item from shop
-            if not game.shop_items:
+            # Remove item from shop - clear purchase price
+            shop_items = [item for item in game.master_items if item.purchase_price is not None]
+
+            if not shop_items:
                 print("Shop is empty!")
                 continue
 
             print("\nShop items:")
-            for i, item in enumerate(game.shop_items):
-                print(f"  {i}. {item}")
+            for i, item in enumerate(shop_items):
+                print(f"  {i}. {item.name} ({item.item_type}) - Buy: {item.purchase_price}g, Sells for: {item.gold_value_per_unit}g")
 
             try:
-                index = int(input("\nEnter item number to remove: ").strip())
-                if 0 <= index < len(game.shop_items):
-                    removed = game.shop_items.pop(index)
-                    print(f"✓ Removed from shop: {removed.name}")
-                else:
+                index = int(input("\nEnter item number to remove from shop: ").strip())
+                if index < 0 or index >= len(shop_items):
                     print("Invalid item number!")
+                    continue
+
+                item = shop_items[index]
+                item.purchase_price = None
+                print(f"✓ Removed {item.name} from shop")
             except ValueError:
                 print("Invalid input!")
 
         elif choice == "3":
             # View all shop items
-            if not game.shop_items:
+            shop_items = [item for item in game.master_items if item.purchase_price is not None]
+
+            if not shop_items:
                 print("Shop is empty!")
                 continue
 
             print(f"\n{'=' * 60}")
             print("SHOP CATALOG")
             print(f"{'=' * 60}")
-            for i, item in enumerate(game.shop_items):
-                print(f"{i}. {item}")
+            for i, item in enumerate(shop_items):
+                print(f"{i}. {item.name} ({item.item_type}) - Buy: {item.purchase_price}g, Sells for: {item.gold_value_per_unit}g")
             print(f"{'=' * 60}")
 
         elif choice == "4":
