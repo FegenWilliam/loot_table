@@ -2223,7 +2223,9 @@ def shop_menu(game):
         print("No players exist! Add players first.")
         return
 
-    if not game.shop_items:
+    # Check if there are any items in the shop
+    shop_items = [item for item in game.master_items if item.purchase_price is not None]
+    if not shop_items:
         print("The shop is empty! Add items to the shop first (Admin Menu > Manage Shop).")
         return
 
