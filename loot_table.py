@@ -234,6 +234,21 @@ class CraftingRecipe:
         return self.__str__()
 
 
+class ShopItem:
+    """Simple shop item with name, type, sell value, and purchase price."""
+    def __init__(self, name, item_type, gold_value, purchase_price):
+        self.name = name
+        self.item_type = item_type
+        self.gold_value = gold_value
+        self.purchase_price = purchase_price
+
+    def __str__(self):
+        return f"{self.name} ({self.item_type}) - Buy: {self.purchase_price}g, Sells for: {self.gold_value}g"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class Player:
     def __init__(self, name):
         self.name = name
@@ -517,6 +532,7 @@ class GameSystem:
         self.currency_name = "gold"  # Configurable currency name
         self.currency_symbol = "g"  # Configurable currency symbol
         self.rarity_system = RaritySystem()  # Rarity system for equipment
+        self.shop_items = []  # Shop catalog of items players can buy
         self.save_file = "loot_system_save_new.json"
 
     def get_current_table(self):
@@ -720,6 +736,15 @@ class GameSystem:
                     for eff_tmpl in self.effect_templates
                 ],
                 'effect_cost': self.effect_cost,
+                'shop_items': [
+                    {
+                        'name': item.name,
+                        'item_type': item.item_type,
+                        'gold_value': item.gold_value,
+                        'purchase_price': item.purchase_price
+                    }
+                    for item in self.shop_items
+                ],
                 'currency_name': self.currency_name,
                 'currency_symbol': self.currency_symbol,
                 'rarity_weights': {
@@ -958,6 +983,17 @@ class GameSystem:
 
             # Load effect cost
             self.effect_cost = data.get('effect_cost', 100)
+
+            # Load shop items
+            self.shop_items = []
+            for shop_item_data in data.get('shop_items', []):
+                shop_item = ShopItem(
+                    shop_item_data['name'],
+                    shop_item_data['item_type'],
+                    shop_item_data['gold_value'],
+                    shop_item_data['purchase_price']
+                )
+                self.shop_items.append(shop_item)
 
             # Load currency settings
             self.currency_name = data.get('currency_name', 'gold')
@@ -1917,7 +1953,8 @@ def show_admin_menu(currency_name="gold"):
     print("5. Change currency settings")
     print("6. Configure rarity weights")
     print("7. Manage effect pool")
-    print("8. Back to main menu")
+    print("8. Manage shop")
+    print("9. Back to main menu")
 
 
 def show_crafting_menu():
@@ -2793,9 +2830,13 @@ def sell_items_menu(game):
 
 
 def shop_menu(game):
-    """Shop where players can buy items from master items and crafting recipes."""
+    """Shop where players can buy items from the shop catalog."""
     if not game.players:
         print("No players exist! Add players first.")
+        return
+
+    if not game.shop_items:
+        print("The shop is empty! Add items to the shop first (Admin Menu > Manage Shop).")
         return
 
     print("\nAvailable players:")
@@ -2817,31 +2858,10 @@ def shop_menu(game):
         print(f"{player.name}'s {game.currency_name}: {player.gold}{game.currency_symbol}")
         print()
 
-        # Collect all purchasable items
-        purchasable_items = []
-
-        # Add master items with purchase prices
-        for master_item in game.master_items:
-            if master_item.purchase_price is not None:
-                purchasable_items.append(('master', master_item))
-
-        # Add craftable items with purchase prices
-        for recipe in game.crafting_recipes:
-            if recipe.purchase_price is not None:
-                purchasable_items.append(('recipe', recipe))
-
-        if not purchasable_items:
-            print("No items available for purchase!")
-            print("(Set purchase prices on master items or recipes to make them available)")
-            return
-
-        # Display items
+        # Display shop items
         print("Available items:")
-        for i, (item_type, item) in enumerate(purchasable_items):
-            if item_type == 'master':
-                print(f"  {i}. {item.name} ({item.item_type}) - {item.purchase_price}{game.currency_symbol} (sells for {item.gold_value_per_unit}{game.currency_symbol})")
-            else:  # recipe
-                print(f"  {i}. {item.output_name} ({item.output_type}) - {item.purchase_price}{game.currency_symbol} (sells for {item.output_gold_value}{game.currency_symbol})")
+        for i, shop_item in enumerate(game.shop_items):
+            print(f"  {i}. {shop_item}")
 
         choice = input("\nEnter item number to buy (or 'back' to return): ").strip().lower()
 
@@ -2850,11 +2870,11 @@ def shop_menu(game):
 
         try:
             index = int(choice)
-            if index < 0 or index >= len(purchasable_items):
+            if index < 0 or index >= len(game.shop_items):
                 print("Invalid item number!")
                 continue
 
-            item_type, item = purchasable_items[index]
+            shop_item = game.shop_items[index]
 
             # Get quantity
             quantity = int(input("How many to buy? ").strip())
@@ -2863,16 +2883,7 @@ def shop_menu(game):
                 continue
 
             # Calculate total cost
-            if item_type == 'master':
-                total_cost = item.purchase_price * quantity
-                item_name = item.name
-                gold_value_per = item.gold_value_per_unit
-                item_type_str = item.item_type
-            else:  # recipe
-                total_cost = item.purchase_price * quantity
-                item_name = item.output_name
-                gold_value_per = item.output_gold_value
-                item_type_str = item.output_type
+            total_cost = shop_item.purchase_price * quantity
 
             # Check if player has enough money
             if player.gold < total_cost:
@@ -2884,11 +2895,10 @@ def shop_menu(game):
 
             # Add items to inventory
             for _ in range(quantity):
-                # Create a loot item
-                loot_item = LootItem(item_name, 1000, gold_value_per, item_type_str, 1)
+                loot_item = LootItem(shop_item.name, 1000, shop_item.gold_value, shop_item.item_type, 1)
                 player.add_item(loot_item)
 
-            print(f"\n✓ Purchased {quantity}x {item_name} for {total_cost}{game.currency_symbol}!")
+            print(f"\n✓ Purchased {quantity}x {shop_item.name} for {total_cost}{game.currency_symbol}!")
             print(f"New {game.currency_name} balance: {player.gold}{game.currency_symbol}")
 
         except ValueError:
@@ -3730,6 +3740,80 @@ def manage_enchantments(game):
             break
 
 
+def manage_shop(game):
+    """Manage shop items that players can purchase."""
+    while True:
+        print("\n--- SHOP MANAGEMENT ---")
+        print("1. Add item to shop")
+        print("2. Remove item from shop")
+        print("3. View all shop items")
+        print("4. Back to admin menu")
+
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add item to shop
+            name = input("Enter item name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            item_type = input("Enter item type (misc/equipment/upgrade/consumable): ").strip() or "misc"
+
+            try:
+                sell_value = int(input(f"Enter sell value (what players get when they sell it): ").strip())
+                if sell_value < 0:
+                    print("Sell value cannot be negative!")
+                    continue
+
+                purchase_price = int(input(f"Enter purchase price (what players pay to buy it): ").strip())
+                if purchase_price < 0:
+                    print("Purchase price cannot be negative!")
+                    continue
+
+                shop_item = ShopItem(name, item_type, sell_value, purchase_price)
+                game.shop_items.append(shop_item)
+                print(f"✓ Added to shop: {shop_item}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "2":
+            # Remove item from shop
+            if not game.shop_items:
+                print("Shop is empty!")
+                continue
+
+            print("\nShop items:")
+            for i, item in enumerate(game.shop_items):
+                print(f"  {i}. {item}")
+
+            try:
+                index = int(input("\nEnter item number to remove: ").strip())
+                if 0 <= index < len(game.shop_items):
+                    removed = game.shop_items.pop(index)
+                    print(f"✓ Removed from shop: {removed.name}")
+                else:
+                    print("Invalid item number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # View all shop items
+            if not game.shop_items:
+                print("Shop is empty!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print("SHOP CATALOG")
+            print(f"{'=' * 60}")
+            for i, item in enumerate(game.shop_items):
+                print(f"{i}. {item}")
+            print(f"{'=' * 60}")
+
+        elif choice == "4":
+            break
+
+
 def admin_menu(game):
     while True:
         show_admin_menu(game.currency_name)
@@ -3902,6 +3986,10 @@ def admin_menu(game):
             manage_effect_pool(game)
 
         elif choice == "8":
+            # Manage shop
+            manage_shop(game)
+
+        elif choice == "9":
             break
 
 
