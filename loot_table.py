@@ -231,19 +231,21 @@ class RaritySystem:
 
 class Consumable:
     """Consumable item with temporary effects."""
-    def __init__(self, name, effect_type, effect_value=None, gold_value=0):
+    def __init__(self, name, effect_type, effect_value=None, gold_value=0, table_name=None):
         self.name = name
         self.item_type = "consumable"
         self.effect_type = effect_type  # e.g., "double_next_draw"
         self.effect_value = effect_value  # Optional value for the effect
         self.gold_value = gold_value  # Base sell value
+        self.table_name = table_name  # For free_draw_ticket: which table to draw from
 
     def __str__(self):
         if self.effect_type == "double_next_draw":
             return f"{self.name} (consumable, {self.gold_value}g) - Doubles quantity on next draw"
         elif self.effect_type == "free_draw_ticket":
             draws = self.effect_value if self.effect_value else 1
-            return f"{self.name} (consumable, {self.gold_value}g) - Draw {draws} item(s) for free from selected table"
+            table_info = f" from '{self.table_name}'" if self.table_name else " from selected table"
+            return f"{self.name} (consumable, {self.gold_value}g) - Draw {draws} item(s) for free{table_info}"
         elif self.effect_type == "trash_to_treasure":
             return f"{self.name} (consumable, {self.gold_value}g) - Next draw excludes highest weight item"
         return f"{self.name} (consumable, {self.gold_value}g) - {self.effect_type}"
@@ -810,7 +812,8 @@ class GameSystem:
                         'name': cons.name,
                         'effect_type': cons.effect_type,
                         'effect_value': cons.effect_value,
-                        'gold_value': cons.gold_value
+                        'gold_value': cons.gold_value,
+                        'table_name': cons.table_name
                     }
                     for cons in self.consumables
                 ],
@@ -994,7 +997,8 @@ class GameSystem:
                     cons_data['name'],
                     cons_data['effect_type'],
                     cons_data.get('effect_value'),
-                    cons_data.get('gold_value', 0)
+                    cons_data.get('gold_value', 0),
+                    cons_data.get('table_name')  # Backward compatibility: None if not present
                 )
                 self.consumables.append(consumable)
 
@@ -1447,12 +1451,33 @@ def manage_consumables(game):
 
             effect_type = None
             effect_value = None
+            table_name = None
 
             if effect_choice == "1":
                 effect_type = "double_next_draw"
                 effect_value = None
             elif effect_choice == "2":
                 effect_type = "free_draw_ticket"
+
+                # Select table for this ticket
+                if not game.loot_tables:
+                    print("❌ No loot tables exist! Create a loot table first.")
+                    continue
+
+                print("\nAvailable loot tables:")
+                for i, table in enumerate(game.loot_tables):
+                    print(f"  {i}. {table.name}")
+
+                try:
+                    table_idx = int(input("Select table for this ticket: ").strip())
+                    if table_idx < 0 or table_idx >= len(game.loot_tables):
+                        print("Invalid table number!")
+                        continue
+                    table_name = game.loot_tables[table_idx].name
+                except ValueError:
+                    print("Invalid input!")
+                    continue
+
                 try:
                     draws = int(input("Enter number of free draws: ").strip())
                     if draws <= 0:
@@ -1475,7 +1500,7 @@ def manage_consumables(game):
                     print("Value cannot be negative!")
                     continue
 
-                consumable = Consumable(name, effect_type, effect_value, gold_value)
+                consumable = Consumable(name, effect_type, effect_value, gold_value, table_name)
                 game.consumables.append(consumable)
                 print(f"✓ Added consumable: {consumable}")
             except ValueError:
@@ -1947,29 +1972,22 @@ def manage_players(game):
                     # Still allow consumption if it's in inventory even if not in definitions
                     effect_type = "double_next_draw"  # Default for now
                     effect_value = None
+                    table_name = None
                 else:
                     effect_type = matching_consumable.effect_type
                     effect_value = matching_consumable.effect_value
+                    table_name = matching_consumable.table_name
 
-                # Handle special setup for ticket effect
-                table_name = None
+                # Validate ticket table exists
                 if effect_type == "free_draw_ticket":
-                    if not game.loot_tables:
-                        print("❌ No loot tables available! Cannot use ticket.")
+                    if not table_name:
+                        print(f"❌ Ticket '{consumable_item.name}' has no table assigned! Cannot use.")
                         continue
 
-                    print("\nAvailable loot tables:")
-                    for i, table in enumerate(game.loot_tables):
-                        print(f"  {i}. {table.name}")
-
-                    try:
-                        table_idx = int(input("Select table to draw from: ").strip())
-                        if table_idx < 0 or table_idx >= len(game.loot_tables):
-                            print("Invalid table number!")
-                            continue
-                        table_name = game.loot_tables[table_idx].name
-                    except ValueError:
-                        print("Invalid input!")
+                    # Check if table still exists
+                    table_exists = any(t.name == table_name for t in game.loot_tables)
+                    if not table_exists:
+                        print(f"❌ Table '{table_name}' no longer exists! Cannot use ticket.")
                         continue
 
                 # Remove from inventory
