@@ -249,6 +249,24 @@ class ShopItem:
         return self.__str__()
 
 
+class Consumable:
+    """Consumable item with temporary effects."""
+    def __init__(self, name, effect_type, effect_value=None, gold_value=0):
+        self.name = name
+        self.item_type = "consumable"
+        self.effect_type = effect_type  # e.g., "double_next_draw"
+        self.effect_value = effect_value  # Optional value for the effect
+        self.gold_value = gold_value  # Base sell value
+
+    def __str__(self):
+        if self.effect_type == "double_next_draw":
+            return f"{self.name} (consumable, {self.gold_value}g) - Doubles quantity on next draw"
+        return f"{self.name} (consumable, {self.gold_value}g) - {self.effect_type}"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class Player:
     def __init__(self, name):
         self.name = name
@@ -256,6 +274,7 @@ class Player:
         self.inventory = []
         self.equipped_items = []  # Items currently equipped
         self.consumed_upgrades = []  # Upgrades that have been consumed
+        self.active_consumable_effects = []  # Active temporary effects from consumables
 
     def add_item(self, item):
         """Add item to inventory with automatic stacking."""
@@ -533,6 +552,7 @@ class GameSystem:
         self.currency_symbol = "g"  # Configurable currency symbol
         self.rarity_system = RaritySystem()  # Rarity system for equipment
         self.shop_items = []  # Shop catalog of items players can buy
+        self.consumables = []  # Consumable items with temporary effects
         self.save_file = "loot_system_save_new.json"
 
     def get_current_table(self):
@@ -1923,15 +1943,16 @@ def show_loot_menu():
     print("\n--- LOOT TABLE MENU ---")
     print("1. Select/Create loot table")
     print("2. Manage Master Items Registry")
-    print("3. Add item to current table")
-    print("4. Edit item in current table")
-    print("5. Delete item from current table")
-    print("6. Edit table settings (name, draw cost)")
-    print("7. Delete current table")
-    print("8. View all items in current table (with weights)")
-    print("9. View rates for players (percentages only)")
-    print("10. View all tables")
-    print("11. Back to main menu")
+    print("3. Manage Consumables")
+    print("4. Add item to current table")
+    print("5. Edit item in current table")
+    print("6. Delete item from current table")
+    print("7. Edit table settings (name, draw cost)")
+    print("8. Delete current table")
+    print("9. View all items in current table (with weights)")
+    print("10. View rates for players (percentages only)")
+    print("11. View all tables")
+    print("12. Back to main menu")
 
 
 def show_player_menu():
@@ -2302,6 +2323,116 @@ def manage_equipment_upgrades(game):
             break
 
 
+def manage_consumables(game):
+    """Manage consumable items with temporary effects."""
+    while True:
+        print("\n--- CONSUMABLES MENU ---")
+        print("1. Add consumable")
+        print("2. Edit consumable")
+        print("3. Delete consumable")
+        print("4. View all consumables")
+        print("5. Back to loot table menu")
+
+        choice = input("Enter choice: ").strip()
+
+        if choice == "1":
+            # Add consumable
+            name = input("Enter consumable name: ").strip()
+            if not name:
+                print("Name cannot be empty!")
+                continue
+
+            print("\nAvailable effect types:")
+            print("  1. double_next_draw - Doubles quantity on next draw (guaranteed)")
+            effect_choice = input("Choose effect type (1): ").strip()
+
+            if effect_choice == "1":
+                effect_type = "double_next_draw"
+            else:
+                print("Invalid effect type!")
+                continue
+
+            try:
+                gold_value = int(input(f"Enter sell {game.currency_name} value: ").strip())
+                if gold_value < 0:
+                    print("Value cannot be negative!")
+                    continue
+
+                consumable = Consumable(name, effect_type, None, gold_value)
+                game.consumables.append(consumable)
+                print(f"✓ Added consumable: {consumable}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "2":
+            # Edit consumable
+            if not game.consumables:
+                print("No consumables exist!")
+                continue
+
+            print("\nConsumables:")
+            for i, cons in enumerate(game.consumables):
+                print(f"  {i}. {cons}")
+
+            try:
+                index = int(input("\nEnter consumable number to edit: ").strip())
+                if index < 0 or index >= len(game.consumables):
+                    print("Invalid consumable number!")
+                    continue
+
+                cons = game.consumables[index]
+                print(f"\nEditing: {cons.name}")
+                print("Leave blank to keep current value")
+
+                new_name = input(f"New name [{cons.name}]: ").strip()
+                new_gold = input(f"New sell value [{cons.gold_value}{game.currency_symbol}]: ").strip()
+
+                if new_name:
+                    cons.name = new_name
+                if new_gold:
+                    cons.gold_value = int(new_gold)
+
+                print(f"✓ Updated: {cons}")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "3":
+            # Delete consumable
+            if not game.consumables:
+                print("No consumables exist!")
+                continue
+
+            print("\nConsumables:")
+            for i, cons in enumerate(game.consumables):
+                print(f"  {i}. {cons}")
+
+            try:
+                index = int(input("\nEnter consumable number to delete: ").strip())
+                if 0 <= index < len(game.consumables):
+                    deleted = game.consumables.pop(index)
+                    print(f"✓ Deleted consumable: {deleted.name}")
+                else:
+                    print("Invalid consumable number!")
+            except ValueError:
+                print("Invalid input!")
+
+        elif choice == "4":
+            # View all consumables
+            if not game.consumables:
+                print("No consumables exist!")
+                continue
+
+            print(f"\n{'=' * 60}")
+            print("ALL CONSUMABLES")
+            print(f"{'=' * 60}")
+            for i, cons in enumerate(game.consumables):
+                print(f"{i}. {cons}")
+            print(f"{'=' * 60}")
+
+        elif choice == "5":
+            break
+
+
 def manage_loot_table(game):
     while True:
         current_table = game.get_current_table()
@@ -2360,6 +2491,10 @@ def manage_loot_table(game):
             manage_master_items(game)
 
         elif choice == "3":
+            # Manage Consumables
+            manage_consumables(game)
+
+        elif choice == "4":
             # Add item
             if not current_table:
                 print("No table selected!")
@@ -2461,7 +2596,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "5":
+        elif choice == "6":
             # Delete item
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2483,7 +2618,7 @@ def manage_loot_table(game):
             except ValueError:
                 print("Invalid input!")
 
-        elif choice == "6":
+        elif choice == "7":
             # Edit table settings
             if not current_table:
                 print("No table selected!")
@@ -2505,7 +2640,7 @@ def manage_loot_table(game):
 
             print(f"✓ Updated table settings!")
 
-        elif choice == "7":
+        elif choice == "8":
             # Delete table
             if not current_table:
                 print("No table to delete!")
@@ -2522,7 +2657,7 @@ def manage_loot_table(game):
                 game.current_table_index = min(game.current_table_index, len(game.loot_tables) - 1)
                 print(f"✓ Deleted table '{deleted_name}'")
 
-        elif choice == "8":
+        elif choice == "9":
             # View all items
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2534,7 +2669,7 @@ def manage_loot_table(game):
                 percentage = (item.weight / total_weight) * 100
                 print(f"  - {item.get_display_name()}: weight {item.weight} ({percentage:.2f}%), value {item.gold_value}{game.currency_symbol}")
 
-        elif choice == "9":
+        elif choice == "10":
             # View rates for players
             if not current_table or not current_table.items:
                 print("No items in current table!")
@@ -2556,7 +2691,7 @@ def manage_loot_table(game):
                 print(f"    Value: {item.gold_value}{game.currency_symbol}")
                 print()
 
-        elif choice == "10":
+        elif choice == "11":
             # View all tables
             if not game.loot_tables:
                 print("No tables exist!")
@@ -2567,7 +2702,7 @@ def manage_loot_table(game):
                 marker = " <-- CURRENT" if i == game.current_table_index else ""
                 print(f"  {i}. {table.name} (Draw Cost: {table.draw_cost}{game.currency_symbol}, Items: {len(table.items)}){marker}")
 
-        elif choice == "11":
+        elif choice == "12":
             break
 
 
